@@ -1,0 +1,20 @@
+{
+  "name": "supacharger",
+  "version": "1.0.0",
+  "description": "Developer CLI for managing Supacharger locally.",
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "bin": {
+    "supacharger": "./index.js"
+  },
+  "scripts": {},
+  "keywords": [
+    "cli",
+    "git",
+    "submodule",
+    "updates"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}
