@@ -12,6 +12,40 @@ const coreupdateCommand = require('../commands/coreupdate');
 
 const program = new Command();
 
+async function isNextRoot(dir = process.cwd()) {
+  try {
+    const packageJsonPath = path.join(dir, 'package.json');
+    const nextConfigPath = path.join(dir, 'next.config.js');
+
+    // Check package.json exists
+    await fs.access(packageJsonPath);
+
+    // Read package.json and check for next dependency
+    const packageJsonRaw = await fs.readFile(packageJsonPath, 'utf8');
+    const packageJson = JSON.parse(packageJsonRaw);
+    const deps = {
+      ...packageJson.dependencies,
+      ...packageJson.devDependencies,
+    };
+    if (!deps || !deps.next) return false;
+
+    // Check next.config.js exists
+    await fs.access(nextConfigPath);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function checkNextRootOrExit() {
+  const isRoot = await isNextRoot();
+  if (!isRoot) {
+    console.error('Error: This command must be run from the root of a Next.js project.');
+    process.exit(1);
+  }
+}
+
 program
   .name('supacharger')
   .description('Developer CLI for managing Supacharger locally.')
@@ -29,19 +63,22 @@ program
 program
   .command('install <pluginName>')
   .description('Install a plugin by name')
-  .action((pluginName) => {
-    installCommand.run(pluginName);
+  .option('-f, --force', 'Force reinstall by removing existing plugin directory')
+  .action(async (pluginName, cmdObj) => {
+    await checkNextRootOrExit();
+    const force = cmdObj.force === true;
+    await installCommand.run(pluginName, { force });
   });
 
 program
   .command('dis <moduleName>')
   .description('Disable plugin by setting PLUGIN_ENABLED to false in config.js and clear plugin registry file')
   .action(async (moduleName) => {
+    await checkNextRootOrExit();
+
     try {
-      // Base plugins directory
       const pluginsBaseDir = path.resolve(process.cwd(), 'src', 'app', 'supacharger', 'plugins');
 
-      // Check if plugins base directory exists
       try {
         const stat = await fs.stat(pluginsBaseDir);
         if (!stat.isDirectory()) {
@@ -55,10 +92,8 @@ program
         process.exit(1);
       }
 
-      // Module directory path
       const moduleDir = path.join(pluginsBaseDir, moduleName);
 
-      // Check if module directory exists
       try {
         const stat = await fs.stat(moduleDir);
         if (!stat.isDirectory()) {
@@ -70,10 +105,8 @@ program
         process.exit(1);
       }
 
-      // Path to config.js inside module directory
       const configPath = path.join(moduleDir, 'config.js');
 
-      // Read config.js
       let configContent;
       try {
         configContent = await fs.readFile(configPath, 'utf8');
@@ -82,7 +115,6 @@ program
         process.exit(1);
       }
 
-      // Replace PLUGIN_ENABLED to false
       const updatedConfig = configContent.replace(
         /PLUGIN_ENABLED\s*:\s*(true|false),?/,
         'PLUGIN_ENABLED: false,'
@@ -95,7 +127,6 @@ program
         console.log(`Plugin "${moduleName}" disabled successfully.`);
       }
 
-      // Path to plugin registry file to clear
       const pluginRegistryPath = path.resolve(
         process.cwd(),
         'src',
@@ -106,7 +137,6 @@ program
         'plugin-registry.ts'
       );
 
-      // Check if plugin registry file exists
       try {
         const stat = await fs.stat(pluginRegistryPath);
         if (!stat.isFile()) {
@@ -118,7 +148,6 @@ program
         process.exit(1);
       }
 
-      // Clear the plugin registry file by writing empty string
       await fs.writeFile(pluginRegistryPath, '', 'utf8');
       console.log(`Plugin registry file cleared at ${pluginRegistryPath}.`);
 
@@ -130,7 +159,6 @@ program
 
 program.parse(process.argv);
 
-// Show help if no arguments
 if (!process.argv.slice(2).length) {
   program.help();
 }
