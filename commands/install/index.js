@@ -55,7 +55,7 @@ async function run(pluginName, options = {}) {
       process.exit(1);
     }
     console.log(`Found module "${pluginName}" with repo: ${githubRepoUrl}`);
-    
+
     // Clone the repo as a submodule into the plugins directory, passing force flag
     await clone(pluginName, githubRepoUrl, force).catch(err => {
       console.error('Error during cloning:', err.message);

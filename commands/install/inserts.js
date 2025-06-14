@@ -1,5 +1,6 @@
 const fs = require('fs').promises;
 const path = require('path');
+const runImportSortFix = require('../common/import-sort'); // Adjust the path accordingly
 
 async function inserts(pluginName) {
   let hadErrors = false;
@@ -82,6 +83,19 @@ async function inserts(pluginName) {
         try {
           await fs.writeFile(targetFilePath, updatedContent, 'utf8');
           console.log(`Updated target file: ${targetFilePath}`);
+
+          // Run import sort autofix on the updated file
+          try {
+            const eslintOutput = await runImportSortFix(targetFilePath);
+            console.log(`Import sort applied on: ${targetFilePath}`);
+            if (eslintOutput) {
+              console.log(eslintOutput);
+            }
+          } catch (eslintErr) {
+            console.error(`Error running import sort on ${targetFilePath}:`, eslintErr);
+            hadErrors = true;
+          }
+
         } catch (err) {
           console.error(`Error: Failed to write target file ${targetFilePath}: ${err.message}`);
           hadErrors = true;

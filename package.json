@@ -21,7 +21,10 @@
   "author": "sharpi_sh @ Glowplug.studio",
   "license": "MIT",
   "main": "bin/cli.js",
-  "devDependencies": {},
+  "devDependencies": {
+    "eslint": "^9.29.0",
+    "eslint-plugin-simple-import-sort": "^12.1.1"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/glowplug-studio/supacharger-cli.git"
