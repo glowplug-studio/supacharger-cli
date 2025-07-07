@@ -23,10 +23,15 @@ function promptYesOnly(question) {
     output: process.stdout
   });
 
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     rl.question(question, answer => {
       rl.close();
-      resolve(answer.trim() === 'Y');
+      const trimmed = answer.trim();
+      if (trimmed === 'Y' || trimmed === 'y') {
+        resolve(true);
+      } else {
+        reject(new Error('Cancelled by user'));
+      }
     });
   });
 }
@@ -105,7 +110,6 @@ async function updateConfigWithCommitHash(cloneDir, commitHash) {
   }
 }
 
-
 async function moveAllFilesForce(srcDir, destDir) {
   const entries = await fs.readdir(srcDir, { withFileTypes: true });
   for (const entry of entries) {
@@ -151,14 +155,9 @@ async function initialise() {
   try {
     console.log(`Starting initialise in directory: ${cwd}`);
 
-    const proceed = await promptYesOnly(
-      'WARNING: I will erase EVERYTHING in this directory except the .git directory. Do you wish to continue? Type Y to confirm: '
+    await promptYesOnly(
+      '\x1b[41m\x1b[97mWARNING:\x1b[0m\x1b[33m I will erase EVERYTHING in this directory except the .git directory. Do you wish to continue? Type Y to confirm: \x1b[0m'
     );
-
-    if (!proceed) {
-      console.log('Operation cancelled by user.');
-      process.exit(0);
-    }
 
     console.log('Deleting all files and folders except .git ...');
     await removeAllExceptGit(cwd);
@@ -190,6 +189,10 @@ async function initialise() {
 
     console.log('Initialise completed successfully. You should now commit changes to your main branch.');
   } catch (err) {
+    if (err.message === 'Cancelled by user') {
+      console.log('\x1b[33mOperation cancelled by user.\x1b[0m');
+      process.exit(0);
+    }
     console.error('Error during initialise:', err);
     process.exit(1);
   }
