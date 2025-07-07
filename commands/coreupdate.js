@@ -3,7 +3,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
-const https = require('https');
+// No longer need 'https' for getRemoteMainHash
 
 function execCommand(command, options = {}) {
   return new Promise((resolve, reject) => {
@@ -43,50 +43,22 @@ async function readCliInstallHash(configPath) {
   }
 }
 
+// Updated getRemoteMainHash function using git ls-remote HEAD
 async function getRemoteMainHash() {
   return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'api.github.com',
-      path: '/repos/glowplug-studio/supacharger-demo/branches/main',
-      method: 'GET',
-      headers: {
-        'User-Agent': 'supacharger-cli', // GitHub requires a user-agent header
-        'Accept': 'application/vnd.github.v3+json'
-      }
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-
-      if (res.statusCode !== 200) {
-        reject(new Error(`GitHub API responded with status code ${res.statusCode}`));
-        res.resume(); // consume response data to free memory
+    exec('git ls-remote git@github.com:glowplug-studio/supacharger-demo.git HEAD', (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`Failed to fetch remote HEAD commit hash: ${stderr || error.message}`));
         return;
       }
-
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          if (json && json.commit && json.commit.sha) {
-            resolve(json.commit.sha);
-          } else {
-            reject(new Error('Malformed response from GitHub API'));
-          }
-        } catch (err) {
-          reject(new Error('Failed to parse GitHub API response: ' + err.message));
-        }
-      });
+      // stdout format: "<commit-hash>\tHEAD\n"
+      const hash = stdout.split('\t')[0].trim();
+      if (!hash) {
+        reject(new Error('Could not parse commit hash from git ls-remote output'));
+        return;
+      }
+      resolve(hash);
     });
-
-    req.on('error', (err) => {
-      reject(new Error('Failed to request GitHub API: ' + err.message));
-    });
-
-    req.end();
   });
 }
 
@@ -164,7 +136,7 @@ Enter Y to continue: \u001b[0m`;
     const answer = await askYesNo(warningMessage);
 
     if (answer !== 'y') {
-      console.log('Aborted by user. No changes were made.');
+      console.log('\x1b[31mAborted by user. No changes were made.\x1b[0m'); // Changed to red
       process.exit(0);
     }
 
@@ -180,10 +152,10 @@ Enter Y to continue: \u001b[0m`;
     }
 
     console.log(`\x1b[34mCurrent CLI_INSTALL_HASH:\x1b[0m \x1b[32m${localHash}\x1b[0m`);
-    console.log(`\x1b[34mChecking for latest main remote commit... May require passphrase or enter:\x1b[0m`);
+    console.log(`\x1b[34mChecking for latest remote commit...\x1b[0m`); // Updated message
 
     const remoteHash = await getRemoteMainHash();
-    console.log(`\x1b[34mLatest remote main branch commit hash: \x1b[32m${remoteHash}\x1b[0m`);
+    console.log(`\x1b[34mLatest remote main branch commit hash:\x1b[0m \x1b[32m${remoteHash}\x1b[0m`); // Updated message
 
     // If hashes are equal, no update needed
     if (localHash === remoteHash) {
@@ -194,7 +166,7 @@ Enter Y to continue: \u001b[0m`;
     // Prepare update directory
     await fs.rm(updateDir, { recursive: true, force: true });
     await fs.mkdir(updateDir, { recursive: true });
-    console.log(`\x1b[34mCreated or cleaned directory: ${updateDir} \x1b[0m`);
+    console.log(`\x1b[34mCreated or cleaned directory:\x1b[0m \x1b[32m${updateDir}\x1b[0m`); // Updated message
 
     // Clone main branch without checkout
     await execCommand(`git clone --no-checkout --branch main git@github.com:glowplug-studio/supacharger-demo.git "${updateDir}"`);
