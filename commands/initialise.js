@@ -59,6 +59,7 @@ async function updateConfigWithCommitHash(cloneDir, commitHash) {
   try {
     let content = await fs.readFile(configPath, 'utf8');
 
+    // Regex to find SC_CONFIG object including multiline content
     const scConfigRegex = /const\s+SC_CONFIG\s*=\s*{([\s\S]*?)^};/m;
 
     const match = content.match(scConfigRegex);
@@ -69,9 +70,13 @@ async function updateConfigWithCommitHash(cloneDir, commitHash) {
 
     let scConfigBody = match[1];
 
+    // Regex to find existing CLI_INSTALL_HASH block inside SC_CONFIG
     const cliHashBlockRegex = /\n\s*\/\*\*\n\s*\* =+ CLI - do not edit =+\n\s*\* =+\n\s*\*\/\n\s*CLI_INSTALL_HASH\s*:\s*['"`][a-f0-9]+['"`],?\n?/;
+
+    // Remove existing CLI_INSTALL_HASH block if any
     scConfigBody = scConfigBody.replace(cliHashBlockRegex, '');
 
+    // Define the CLI_INSTALL_HASH block to add
     const cliHashBlock = `
 
   /**
@@ -83,18 +88,23 @@ async function updateConfigWithCommitHash(cloneDir, commitHash) {
 
 `;
 
+    // Append the CLI_INSTALL_HASH block at the end of SC_CONFIG body
     scConfigBody = scConfigBody.trimEnd() + cliHashBlock;
 
+    // Rebuild the SC_CONFIG object
     const newSCConfig = `const SC_CONFIG = {${scConfigBody}};`;
 
+    // Replace old SC_CONFIG object with new one in the file content
     content = content.replace(scConfigRegex, newSCConfig);
 
+    // Write updated content back to file
     await fs.writeFile(configPath, content, 'utf8');
     console.log(`Updated ${path.relative(cloneDir, configPath)} with CLI_INSTALL_HASH: ${commitHash}`);
   } catch (err) {
     console.warn(`Warning: Failed to update supacharger-config.ts: ${err.message}`);
   }
 }
+
 
 async function moveAllFilesForce(srcDir, destDir) {
   const entries = await fs.readdir(srcDir, { withFileTypes: true });

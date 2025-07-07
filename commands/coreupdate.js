@@ -54,6 +54,21 @@ async function readCliInstallHash(configPath) {
   }
 }
 
+async function updateCliInstallHash(configPath, newHash) {
+  // Read config file content
+  let content = await fs.readFile(configPath, 'utf8');
+
+  // Replace CLI_INSTALL_HASH with new hash
+  const newContent = content.replace(
+    /CLI_INSTALL_HASH\s*:\s*['"`][a-f0-9]+['"`]/,
+    `CLI_INSTALL_HASH: '${newHash}'`
+  );
+
+  // Write back updated content
+  await fs.writeFile(configPath, newContent, 'utf8');
+  console.log(`\x1b[32mUpdated CLI_INSTALL_HASH in supacharger-config.ts to ${newHash}\x1b[0m`);
+}
+
 async function getRemoteMainHash() {
   return new Promise((resolve, reject) => {
     const options = {
@@ -148,15 +163,52 @@ async function removeDirContents(dir) {
   );
 }
 
-async function cloneLatestMain(updateDir) {
-  await removeDirContents(updateDir);
-  console.log('Cloning latest main branch...');
-  await execCommand(
-    `git clone --depth 1 --branch main git@github.com:glowplug-studio/supacharger-demo.git "${updateDir}"`
-  );
-  console.log('Latest main branch cloned.');
+async function moveFileToRoot(updateDir, relPath, rootDir) {
+  // Ensure destination directory exists
+  const destPath = path.join(rootDir, relPath);
+  const destDir = path.dirname(destPath);
+  await fs.mkdir(destDir, { recursive: true });
+
+  // Move file from updateDir to rootDir preserving relative path
+  await fs.rename(path.join(updateDir, relPath), destPath);
 }
 
+// New reusable function to clone latest commit without checkout and checkout specific commit
+async function cloneAndCheckout(updateDir, commitHash) {
+  // Remove contents of updateDir
+  await removeDirContents(updateDir);
+
+  // Clone main branch without checkout
+  console.log('\x1b[34mCloning main branch without checkout...\x1b[0m');
+  await execCommand(
+    `git clone --no-checkout --branch main git@github.com:glowplug-studio/supacharger-demo.git "${updateDir}"`
+  );
+
+  // Disable detached head advice
+  await execCommand(`git -C "${updateDir}" config advice.detachedHead false`);
+
+  // Checkout specific commit
+  console.log(`\x1b[34mChecking out commit ${commitHash}...\x1b[0m`);
+  await execCommand(`git -C "${updateDir}" checkout ${commitHash}`);
+
+  // Remove .git folder
+  await removeGitDir(updateDir);
+}
+
+// Function to move files from updateDir to rootDir, optionally skipping conflict files
+async function moveFiles(updateDir, rootDir, conflictFiles = []) {
+  const files = await walkFiles(updateDir);
+
+  for (const relPath of files) {
+    if (conflictFiles.includes(relPath)) {
+      // Skip conflicting files if requested
+      continue;
+    }
+    await moveFileToRoot(updateDir, relPath, rootDir);
+  }
+}
+
+// Main coreupdate function
 async function coreupdate() {
   // Files to ignore during integrity check
   const ignoredFiles = ['src/supacharger/supacharger-config.ts'];
@@ -189,8 +241,8 @@ Enter Y to continue: \u001b[0m`;
     }
 
     console.log(`\x1b[34mCurrent CLI_INSTALL_HASH:\x1b[0m \x1b[32m${localHash}\x1b[0m`);
-    console.log(`\x1b[34mChecking for latest remote commit...\x1b[0m`);
 
+    // Get latest remote commit hash from main
     const remoteHash = await getRemoteMainHash();
 
     console.log(`\x1b[34mLatest remote main branch commit hash:\x1b[0m \x1b[32m${remoteHash}\x1b[0m`);
@@ -206,20 +258,8 @@ Enter Y to continue: \u001b[0m`;
     await fs.mkdir(updateDir, { recursive: true });
     console.log(`\x1b[34mCreated or cleaned directory:\x1b[0m \x1b[32m${updateDir}\x1b[0m`);
 
-    // Clone main branch without checkout
-    await execCommand(
-      `git clone --no-checkout --branch main git@github.com:glowplug-studio/supacharger-demo.git "${updateDir}"`
-    );
-
-    await execCommand(
-      `git -C "${updateDir}" config advice.detachedHead false`
-    );
-
-    // Checkout specific commit (CLI_INSTALL_HASH only)
-    await execCommand(`git -C "${updateDir}" checkout ${localHash}`);
-
-    // Remove .git directory
-    await removeGitDir(updateDir);
+    // Clone and checkout the localHash commit for integrity check
+    await cloneAndCheckout(updateDir, localHash);
 
     // Start integrity check
     console.log('\x1b[34m\nChecking Core Integrity...\x1b[0m');
@@ -232,8 +272,6 @@ Enter Y to continue: \u001b[0m`;
     for (const relPath of updateFiles) {
       if (ignoredFiles.includes(relPath)) continue;
 
-      // Removed per-file logging as requested
-
       const updateFilePath = path.join(updateDir, relPath);
       const localFilePath = path.join(cwd, relPath);
 
@@ -244,7 +282,10 @@ Enter Y to continue: \u001b[0m`;
         continue;
       }
 
-      const [hashUpdate, hashLocal] = await Promise.all([hashFile(updateFilePath), hashFile(localFilePath)]);
+      const [hashUpdate, hashLocal] = await Promise.all([
+        hashFile(updateFilePath),
+        hashFile(localFilePath),
+      ]);
 
       if (hashUpdate !== hashLocal) {
         differentFiles.push(relPath);
@@ -255,13 +296,15 @@ Enter Y to continue: \u001b[0m`;
       console.log('Local files match the state of the remote at the CLI_INSTALL_HASH commit.');
       console.log('Proceeding to clone the latest main branch into the update directory.');
 
+      // Clean and clone latest main branch
       await removeDirContents(updateDir);
       await cloneLatestMain(updateDir);
     } else {
-      console.log('\x1b[41m\x1b[97m CONFLICTS! \x1b[0m \x1b[34m\nThe following files have been modified or are missing:\x1b[0m');
+      console.log(
+        '\x1b[41m\x1b[97m CONFLICTS! \x1b[0m \x1b[34m\nThe following files have been modified or are missing:\x1b[0m'
+      );
 
       missingFiles.forEach((f) => console.log(`  - \x1b[33mMISSING\x1b[0m: ${f}`));
-
       differentFiles.forEach((f) => console.log(`  - \x1b[31mMODIFIED\x1b[0m: ${f}`));
 
       const prompt = `
@@ -273,17 +316,33 @@ Enter Y to continue: \u001b[0m`;
 
       const action = await askAction(prompt);
 
-      if (action === 'O' || action === 'S') {
-        console.log(`You chose to ${action === 'O' ? 'overwrite' : 'skip'} the update.`);
-
-        await removeDirContents(updateDir);
-        await cloneLatestMain(updateDir);
-
-        console.log('Update directory reset with latest main branch.');
-      } else {
+      if (action === 'E') {
         console.log('\x1b[34mExiting without changes.\x1b[0m');
         process.exit(0);
       }
+
+      // Clean update directory and clone latest main branch at latestHash
+      await fs.rm(updateDir, { recursive: true, force: true });
+      await fs.mkdir(updateDir, { recursive: true });
+      await cloneAndCheckout(updateDir, remoteHash);
+
+      // Move files according to action
+      if (action === 'O') {
+        // Overwrite all: move all files up one directory level
+        await moveFiles(updateDir, cwd);
+      } else if (action === 'S') {
+        // Skip conflict files: move all except conflicting files
+        await moveFiles(updateDir, cwd, differentFiles);
+      }
+
+      // Update CLI_INSTALL_HASH in config to latestHash
+      await updateCliInstallHash(localConfigPath, remoteHash);
+
+      // Remove the update directory completely
+      await fs.rm(updateDir, { recursive: true, force: true });
+
+      console.log('\x1b[32mUpdate complete and .sc-core-update folder removed.\x1b[0m');
+      return;
     }
 
     console.log('Core update process complete.');
