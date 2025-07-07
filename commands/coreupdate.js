@@ -3,6 +3,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
+const https = require('https');
 
 function execCommand(command, options = {}) {
   return new Promise((resolve, reject) => {
@@ -43,15 +44,50 @@ async function readCliInstallHash(configPath) {
 }
 
 async function getRemoteMainHash() {
-  try {
-    const { stdout } = await execCommand(
-      'git ls-remote git@github.com:glowplug-studio/supacharger-demo.git refs/heads/main'
-    );
-    const hash = stdout.split('\t')[0].trim();
-    return hash;
-  } catch (err) {
-    throw new Error(`Failed to fetch remote main branch hash: ${err.message}`);
-  }
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.github.com',
+      path: '/repos/glowplug-studio/supacharger-demo/branches/main',
+      method: 'GET',
+      headers: {
+        'User-Agent': 'supacharger-cli', // GitHub requires a user-agent header
+        'Accept': 'application/vnd.github.v3+json'
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+
+      if (res.statusCode !== 200) {
+        reject(new Error(`GitHub API responded with status code ${res.statusCode}`));
+        res.resume(); // consume response data to free memory
+        return;
+      }
+
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (json && json.commit && json.commit.sha) {
+            resolve(json.commit.sha);
+          } else {
+            reject(new Error('Malformed response from GitHub API'));
+          }
+        } catch (err) {
+          reject(new Error('Failed to parse GitHub API response: ' + err.message));
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      reject(new Error('Failed to request GitHub API: ' + err.message));
+    });
+
+    req.end();
+  });
 }
 
 async function removeGitDir(dir) {
@@ -139,7 +175,7 @@ Enter Y to continue: \u001b[0m`;
     const localHash = await readCliInstallHash(localConfigPath);
 
     if (!localHash) {
-      console.error('\x1b[31mError: CLI_INSTALL_HASH does not exist in supacharger-config.ts. Aborting.\x1b[31m');
+      console.error('\x1b[31mError: CLI_INSTALL_HASH does not exist in supacharger-config.ts. Aborting.\x1b[0m');
       process.exit(1);
     }
 
@@ -147,7 +183,7 @@ Enter Y to continue: \u001b[0m`;
     console.log(`\x1b[34mChecking for latest main remote commit... May require passphrase or enter:\x1b[0m`);
 
     const remoteHash = await getRemoteMainHash();
-    console.log(`\x1b[34mLatest remote main branch commit hash: \x1b[32m ${remoteHash}\x1b[0m`);
+    console.log(`\x1b[34mLatest remote main branch commit hash: \x1b[32m${remoteHash}\x1b[0m`);
 
     // If hashes are equal, no update needed
     if (localHash === remoteHash) {
