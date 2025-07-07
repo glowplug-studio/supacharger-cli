@@ -139,14 +139,15 @@ Enter Y to continue: \u001b[0m`;
     const localHash = await readCliInstallHash(localConfigPath);
 
     if (!localHash) {
-      console.error('Error: CLI_INSTALL_HASH does not exist in supacharger-config.ts. Aborting.');
+      console.error('\x1b[31mError: CLI_INSTALL_HASH does not exist in supacharger-config.ts. Aborting.\x1b[31m');
       process.exit(1);
     }
 
-    console.log(`Current CLI_INSTALL_HASH: ${localHash}`);
+    console.log(`\x1b[34mCurrent CLI_INSTALL_HASH:\x1b[0m \x1b[32m${localHash}\x1b[0m`);
+    console.log(`\x1b[34mChecking for latest main remote commit... May require passphrase or enter:\x1b[0m`);
 
     const remoteHash = await getRemoteMainHash();
-    console.log(`Latest remote main branch commit hash: ${remoteHash}`);
+    console.log(`\x1b[34mLatest remote main branch commit hash: \x1b[32m ${remoteHash}\x1b[0m`);
 
     // If hashes are equal, no update needed
     if (localHash === remoteHash) {
@@ -157,10 +158,9 @@ Enter Y to continue: \u001b[0m`;
     // Prepare update directory
     await fs.rm(updateDir, { recursive: true, force: true });
     await fs.mkdir(updateDir, { recursive: true });
-    console.log(`Created or cleaned directory: ${updateDir}`);
+    console.log(`\x1b[34mCreated or cleaned directory: ${updateDir} \x1b[0m`);
 
     // Clone main branch without checkout
-    console.log(`Cloning main branch into ${updateDir}...`);
     await execCommand(`git clone --no-checkout --branch main git@github.com:glowplug-studio/supacharger-demo.git "${updateDir}"`);
 
     // Checkout specific commit (CLI_INSTALL_HASH only)
