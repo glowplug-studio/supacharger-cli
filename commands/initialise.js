@@ -14,7 +14,7 @@ function execCommand(command, options = {}) {
   });
 }
 
-async function promptYesNo(question) {
+function promptYesOnly(question) {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
@@ -23,8 +23,7 @@ async function promptYesNo(question) {
   return new Promise(resolve => {
     rl.question(question, answer => {
       rl.close();
-      const normalized = answer.trim().toLowerCase();
-      resolve(normalized === 'y' || normalized === 'yes' || normalized === '');
+      resolve(answer.trim() === 'Y');
     });
   });
 }
@@ -38,13 +37,25 @@ async function removeAllExceptGit(dir) {
   }));
 }
 
+async function removeGitDir(dir) {
+  const gitPath = path.join(dir, '.git');
+  try {
+    const stat = await fs.stat(gitPath);
+    if (stat.isDirectory()) {
+      await fs.rm(gitPath, { recursive: true, force: true });
+      console.log('Removed .git directory from cloned folder.');
+    }
+  } catch {
+    // .git does not exist, no action needed
+  }
+}
+
 async function moveAllFilesForce(srcDir, destDir) {
   const entries = await fs.readdir(srcDir, { withFileTypes: true });
   for (const entry of entries) {
     const srcPath = path.join(srcDir, entry.name);
     const destPath = path.join(destDir, entry.name);
 
-    // Remove destination if exists
     try {
       await fs.access(destPath);
       await fs.rm(destPath, { recursive: true, force: true });
@@ -54,7 +65,6 @@ async function moveAllFilesForce(srcDir, destDir) {
 
     await fs.rename(srcPath, destPath);
   }
-  // Remove now empty temp directory
   await fs.rmdir(srcDir);
 }
 
@@ -68,9 +78,8 @@ async function initialise() {
   try {
     console.log(`Starting initialise in directory: ${cwd}`);
 
-    // Prompt user for confirmation
-    const proceed = await promptYesNo(
-      'WARNING: I will erase EVERYTHING in this directory except the .git directory. Do you wish to continue? (Y/n) '
+    const proceed = await promptYesOnly(
+      'WARNING: I will erase EVERYTHING in this directory except the .git directory. Do you wish to continue? Type Y to confirm: '
     );
 
     if (!proceed) {
@@ -82,7 +91,6 @@ async function initialise() {
     await removeAllExceptGit(cwd);
     console.log('Cleanup complete.');
 
-    // Remove tempDir if exists
     try {
       await fs.access(tempDir);
       console.log(`Removing existing temporary folder: ${tempDir}`);
@@ -104,6 +112,8 @@ async function initialise() {
     clearInterval(spinnerInterval);
     process.stdout.write('\b'); // Erase spinner
     console.log('Done.');
+
+    await removeGitDir(tempDir);
 
     console.log('Moving files from temporary folder up to current directory ...');
     await moveAllFilesForce(tempDir, cwd);
