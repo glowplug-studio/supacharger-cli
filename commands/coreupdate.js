@@ -3,7 +3,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
-// No longer need 'https' for getRemoteMainHash
+const https = require('https');
 
 function execCommand(command, options = {}) {
   return new Promise((resolve, reject) => {
@@ -43,22 +43,50 @@ async function readCliInstallHash(configPath) {
   }
 }
 
-// Updated getRemoteMainHash function using git ls-remote HEAD
 async function getRemoteMainHash() {
   return new Promise((resolve, reject) => {
-    exec('git ls-remote git@github.com:glowplug-studio/supacharger-demo.git HEAD', (error, stdout, stderr) => {
-      if (error) {
-        reject(new Error(`Failed to fetch remote HEAD commit hash: ${stderr || error.message}`));
+    const options = {
+      hostname: 'api.github.com',
+      path: '/repos/glowplug-studio/supacharger-demo/commits?sha=main&per_page=1',
+      method: 'GET',
+      headers: {
+        'User-Agent': 'supacharger-cli',
+        'Accept': 'application/vnd.github+json',
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+
+      if (res.statusCode !== 200) {
+        reject(new Error(`GitHub API responded with status code ${res.statusCode}`));
+        res.resume();
         return;
       }
-      // stdout format: "<commit-hash>\tHEAD\n"
-      const hash = stdout.split('\t')[0].trim();
-      if (!hash) {
-        reject(new Error('Could not parse commit hash from git ls-remote output'));
-        return;
-      }
-      resolve(hash);
+
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (Array.isArray(json) && json.length > 0 && json[0].sha) {
+            resolve(json[0].sha);
+          } else {
+            reject(new Error('Unexpected GitHub API response format'));
+          }
+        } catch (err) {
+          reject(new Error('Failed to parse GitHub API response: ' + err.message));
+        }
+      });
     });
+
+    req.on('error', (err) => {
+      reject(new Error('Request error: ' + err.message));
+    });
+
+    req.end();
   });
 }
 
@@ -68,7 +96,7 @@ async function removeGitDir(dir) {
     const stat = await fs.stat(gitPath);
     if (stat.isDirectory()) {
       await fs.rm(gitPath, { recursive: true, force: true });
-      console.log('Removed .git directory from cloned folder.');
+      console.log('\x1b[34mRemoved .git directory from cloned folder.\x1b[0m');
     }
   } catch {
     // .git does not exist, no action needed
@@ -101,16 +129,20 @@ async function walkFiles(baseDir, currentDir = '') {
 
 async function removeDirContents(dir) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
-  await Promise.all(entries.map(async (entry) => {
-    const fullPath = path.join(dir, entry.name);
-    await fs.rm(fullPath, { recursive: true, force: true });
-  }));
+  await Promise.all(
+    entries.map(async (entry) => {
+      const fullPath = path.join(dir, entry.name);
+      await fs.rm(fullPath, { recursive: true, force: true });
+    })
+  );
 }
 
 async function cloneLatestMain(updateDir) {
   await removeDirContents(updateDir);
   console.log('Cloning latest main branch...');
-  await execCommand(`git clone --depth 1 --branch main git@github.com:glowplug-studio/supacharger-demo.git "${updateDir}"`);
+  await execCommand(
+    `git clone --depth 1 --branch main git@github.com:glowplug-studio/supacharger-demo.git "${updateDir}"`
+  );
   console.log('Latest main branch cloned.');
 }
 
@@ -120,9 +152,7 @@ async function coreupdate() {
   let spinnerInterval;
 
   // Files to ignore during integrity check
-  const ignoredFiles = [
-    'src/supacharger/supacharger-config.ts',
-  ];
+  const ignoredFiles = ['src/supacharger/supacharger-config.ts'];
 
   try {
     const warningMessage = `
@@ -136,7 +166,7 @@ Enter Y to continue: \u001b[0m`;
     const answer = await askYesNo(warningMessage);
 
     if (answer !== 'y') {
-      console.log('\x1b[31mAborted by user. No changes were made.\x1b[0m'); // Changed to red
+      console.log('\x1b[31mAborted by user. No changes were made.\x1b[0m');
       process.exit(0);
     }
 
@@ -152,10 +182,11 @@ Enter Y to continue: \u001b[0m`;
     }
 
     console.log(`\x1b[34mCurrent CLI_INSTALL_HASH:\x1b[0m \x1b[32m${localHash}\x1b[0m`);
-    console.log(`\x1b[34mChecking for latest remote commit...\x1b[0m`); // Updated message
+    console.log(`\x1b[34mChecking for latest remote commit...\x1b[0m`);
 
     const remoteHash = await getRemoteMainHash();
-    console.log(`\x1b[34mLatest remote main branch commit hash:\x1b[0m \x1b[32m${remoteHash}\x1b[0m`); // Updated message
+
+    console.log(`\x1b[34mLatest remote main branch commit hash:\x1b[0m \x1b[32m${remoteHash}\x1b[0m`);
 
     // If hashes are equal, no update needed
     if (localHash === remoteHash) {
@@ -166,10 +197,16 @@ Enter Y to continue: \u001b[0m`;
     // Prepare update directory
     await fs.rm(updateDir, { recursive: true, force: true });
     await fs.mkdir(updateDir, { recursive: true });
-    console.log(`\x1b[34mCreated or cleaned directory:\x1b[0m \x1b[32m${updateDir}\x1b[0m`); // Updated message
+    console.log(`\x1b[34mCreated or cleaned directory:\x1b[0m \x1b[32m${updateDir}\x1b[0m`);
+
+    await execCommand(
+      `git -C .sc-core-update config advice.detachedHead false`
+    );
 
     // Clone main branch without checkout
-    await execCommand(`git clone --no-checkout --branch main git@github.com:glowplug-studio/supacharger-demo.git "${updateDir}"`);
+    await execCommand(
+      `git clone --no-checkout --branch main git@github.com:glowplug-studio/supacharger-demo.git "${updateDir}"`
+    );
 
     // Checkout specific commit (CLI_INSTALL_HASH only)
     await execCommand(`git -C "${updateDir}" checkout ${localHash}`);
@@ -178,7 +215,7 @@ Enter Y to continue: \u001b[0m`;
     await removeGitDir(updateDir);
 
     // Start integrity check
-    console.log('Checking Core Integrity...');
+    console.log('\x1b[34m\nChecking Core Integrity...\x1b[0m');
 
     spinnerInterval = setInterval(() => {
       process.stdout.write(`\rChecking Core Integrity... ${spinnerFrames[spinnerIndex]} `);
@@ -205,10 +242,7 @@ Enter Y to continue: \u001b[0m`;
         continue;
       }
 
-      const [hashUpdate, hashLocal] = await Promise.all([
-        hashFile(updateFilePath),
-        hashFile(localFilePath),
-      ]);
+      const [hashUpdate, hashLocal] = await Promise.all([hashFile(updateFilePath), hashFile(localFilePath)]);
 
       if (hashUpdate !== hashLocal) {
         differentFiles.push(relPath);
@@ -218,7 +252,6 @@ Enter Y to continue: \u001b[0m`;
     process.stdout.write('\r\x1b[K');
     clearInterval(spinnerInterval);
 
-    // If no missing or different files, files match exactly the commit in CLI_INSTALL_HASH
     if (missingFiles.length === 0 && differentFiles.length === 0) {
       console.log('Local files match the state of the remote at the CLI_INSTALL_HASH commit.');
       console.log('Proceeding to clone the latest main branch into the update directory.');
@@ -226,11 +259,16 @@ Enter Y to continue: \u001b[0m`;
       await removeDirContents(updateDir);
       await cloneLatestMain(updateDir);
     } else {
-      console.log('\nThe following files have been modified or are missing:');
-      missingFiles.forEach(f => console.log(`  - MISSING: ${f}`));
-      differentFiles.forEach(f => console.log(`  - MODIFIED: ${f}`));
+      console.log('\x1b[34m\nThe following files have been modified or are missing:\x1b[0m');
 
-      const action = await askYesNo('\nChoose action: Overwrite all (o), Skip update (s), Exit (e): ');
+      missingFiles.forEach((f) => console.log(`  - \x1b[33mMISSING\x1b[0m: ${f}`));
+
+      differentFiles.forEach((f) => console.log(`  - \x1b[31mMODIFIED\x1b[0m: ${f}`));
+
+
+      const prompt = '\n\x1b[34mChoose action: Overwrite all (\x1b[31mo\x1b[34m), Skip update (\x1b[33ms\x1b[34m), Exit (\x1b[34me\x1b[0m): ';
+      const action = await askYesNo(prompt);
+      
 
       if (action === 'o' || action === 's') {
         console.log(`You chose to ${action === 'o' ? 'overwrite' : 'skip'} the update.`);
