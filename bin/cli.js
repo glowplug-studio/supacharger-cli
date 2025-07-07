@@ -157,6 +157,33 @@ program
     }
   });
 
+program
+  .command('coreupdate')
+  .description('Clone latest supacharger-demo into .update folder and attempt to merge with current project')
+  .action(coreupdateCommand);
+
+  program
+  .command('initialise')
+  .description('Clone latest supacharger-demo into current directory')
+  .action(initialiseCommand);
+
+  program
+  .command('enable')
+  .description('Enable command (not implemented yet)')
+  .action(enableCommand);
+
+
+  program
+  .command('uninstall')
+  .description('Uninstall command (not implemented yet)')
+  .action(uninstallCommand);
+
+
+  program
+  .command('disable')
+  .description('Disable command (not implemented yet)')
+  .action(disableCommand);;
+
 program.parse(process.argv);
 
 if (!process.argv.slice(2).length) {
