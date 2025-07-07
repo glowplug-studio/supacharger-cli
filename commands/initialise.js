@@ -51,7 +51,7 @@ async function removeGitDir(dir) {
     const stat = await fs.stat(gitPath);
     if (stat.isDirectory()) {
       await fs.rm(gitPath, { recursive: true, force: true });
-      console.log('Removed .git directory from cloned folder.');
+      console.log('\x1b[34m Removed .git directory from cloned folder.\x1b[0m');
     }
   } catch {
     // .git does not exist, no action needed
@@ -104,7 +104,7 @@ async function updateConfigWithCommitHash(cloneDir, commitHash) {
 
     // Write updated content back to file
     await fs.writeFile(configPath, content, 'utf8');
-    console.log(`Updated ${path.relative(cloneDir, configPath)} with CLI_INSTALL_HASH: ${commitHash}`);
+    console.log(`\x1b[34mUpdated ${path.relative(cloneDir, configPath)} with CLI_INSTALL_HASH: ${commitHash}\x1b[0m`);
   } catch (err) {
     console.warn(`Warning: Failed to update supacharger-config.ts: ${err.message}`);
   }
@@ -153,15 +153,14 @@ async function initialise() {
   const tempDir = path.join(cwd, '.sc-core-install');
 
   try {
-    console.log(`Starting initialise in directory: ${cwd}`);
+    console.log(`\x1b[34mInitialising in directory: ${cwd} \x1b[0m`);
 
     await promptYesOnly(
       '\x1b[41m\x1b[97mWARNING:\x1b[0m\x1b[33m I will erase EVERYTHING in this directory except the .git directory. Do you wish to continue? Type Y to confirm: \x1b[0m'
     );
 
-    console.log('Deleting all files and folders except .git ...');
     await removeAllExceptGit(cwd);
-    console.log('Cleanup complete.');
+    console.log('\x1b[34mRemoved all files and dirs except .git...\x1b[0m');
 
     try {
       await fs.access(tempDir);
@@ -171,7 +170,7 @@ async function initialise() {
       // tempDir does not exist, no action needed
     }
 
-    console.log(`Cloning repository into temporary folder '${tempDir}' ...`);
+    console.log(`\x1b[34mCreating temporary dir '${tempDir}'...\x1b[0m`);
     await gitClone('git@github.com:glowplug-studio/supacharger-demo.git', tempDir);
 
     console.log('Done.');
@@ -183,14 +182,13 @@ async function initialise() {
 
     await updateConfigWithCommitHash(tempDir, trimmedHash);
 
-    console.log('Moving files from temporary folder up to current directory ...');
+    console.log('\x1b[34mMoving files from temporary folder up to current directory...\x1b[0m');
     await moveAllFilesForce(tempDir, cwd);
-    console.log('Files moved successfully.');
-
-    console.log('Initialise completed successfully. You should now commit changes to your main branch.');
+  
+    console.log('\x1b[32m✓ Initialise completed successfully. You should now commit changes to your main branch.\x1b[0m');
   } catch (err) {
     if (err.message === 'Cancelled by user') {
-      console.log('\x1b[33mOperation cancelled by user.\x1b[0m');
+      console.log('\x1b[34mOperation cancelled by user.\x1b[0m');
       process.exit(0);
     }
     console.error('Error during initialise:', err);
