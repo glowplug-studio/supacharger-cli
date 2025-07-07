@@ -28,9 +28,20 @@ function askYesNo(question) {
   return new Promise((resolve) => {
     rl.question(question, (answer) => {
       rl.close();
-      resolve(answer.trim().toLowerCase());
+      resolve(answer.trim());
     });
   });
+}
+
+// Helper function to repeatedly ask for a valid action
+async function askAction(prompt) {
+  while (true) {
+    const answer = (await askYesNo(prompt)).toUpperCase();
+    if (['O', 'S', 'E'].includes(answer)) {
+      return answer;
+    }
+    console.log('\x1b[31mInvalid input. Please enter O, S, or E.\x1b[0m');
+  }
 }
 
 async function readCliInstallHash(configPath) {
@@ -147,10 +158,6 @@ async function cloneLatestMain(updateDir) {
 }
 
 async function coreupdate() {
-  const spinnerFrames = ['|', '/', '-', '\\'];
-  let spinnerIndex = 0;
-  let spinnerInterval;
-
   // Files to ignore during integrity check
   const ignoredFiles = ['src/supacharger/supacharger-config.ts'];
 
@@ -165,7 +172,7 @@ Enter Y to continue: \u001b[0m`;
 
     const answer = await askYesNo(warningMessage);
 
-    if (answer !== 'y') {
+    if (answer.toLowerCase() !== 'y') {
       console.log('\x1b[31mAborted by user. No changes were made.\x1b[0m');
       process.exit(0);
     }
@@ -205,22 +212,17 @@ Enter Y to continue: \u001b[0m`;
     );
 
     await execCommand(
-      `git -C ${updateDir} config advice.detachedHead false`
+      `git -C "${updateDir}" config advice.detachedHead false`
     );
 
     // Checkout specific commit (CLI_INSTALL_HASH only)
-    await execCommand(`git -C ${updateDir} checkout ${localHash}`);
+    await execCommand(`git -C "${updateDir}" checkout ${localHash}`);
 
     // Remove .git directory
     await removeGitDir(updateDir);
 
     // Start integrity check
     console.log('\x1b[34m\nChecking Core Integrity...\x1b[0m');
-
-    spinnerInterval = setInterval(() => {
-      process.stdout.write(`\rChecking Core Integrity... Comparing local core to remote. ${spinnerFrames[spinnerIndex]} `);
-      spinnerIndex = (spinnerIndex + 1) % spinnerFrames.length;
-    }, 100);
 
     const updateFiles = await walkFiles(updateDir);
 
@@ -230,7 +232,7 @@ Enter Y to continue: \u001b[0m`;
     for (const relPath of updateFiles) {
       if (ignoredFiles.includes(relPath)) continue;
 
-      process.stdout.write(`\rChecking Core Integrity... ${spinnerFrames[spinnerIndex]}  ${relPath}  `);
+      // Removed per-file logging as requested
 
       const updateFilePath = path.join(updateDir, relPath);
       const localFilePath = path.join(cwd, relPath);
@@ -249,9 +251,6 @@ Enter Y to continue: \u001b[0m`;
       }
     }
 
-    process.stdout.write('\r\x1b[K');
-    clearInterval(spinnerInterval);
-
     if (missingFiles.length === 0 && differentFiles.length === 0) {
       console.log('Local files match the state of the remote at the CLI_INSTALL_HASH commit.');
       console.log('Proceeding to clone the latest main branch into the update directory.');
@@ -265,15 +264,14 @@ Enter Y to continue: \u001b[0m`;
 
       differentFiles.forEach((f) => console.log(`  - \x1b[31mMODIFIED\x1b[0m: ${f}`));
 
-
       const prompt = `
-      \x1b[34mChoose action:\x1b[0m
-      \x1b[31m- OVERWRITE ALL (O)\x1b[0m
-      \x1b[33m- SKIP CONFLICT FILES OVERWRITE THE REST (S)\x1b[0m
-      \x1b[34m- EXIT (E)\x1b[0m
-      Your choice: `;
+\x1b[34mchoose action:
+\x1b[31m(O)\x1b[34m overwrite all
+\x1b[33m(S)\x1b[34m skip conflict files overwrite the rest
+\x1b[35m(E)\x1b[0m exit
+\x1b[34mYour choice: \x1b[0m`;
 
-      const action = await askYesNo(prompt);
+      const action = await askAction(prompt);
 
       if (action === 'O' || action === 'S') {
         console.log(`You chose to ${action === 'O' ? 'overwrite' : 'skip'} the update.`);
@@ -282,7 +280,6 @@ Enter Y to continue: \u001b[0m`;
         await cloneLatestMain(updateDir);
 
         console.log('Update directory reset with latest main branch.');
-
       } else {
         console.log('\x1b[34mExiting without changes.\x1b[0m');
         process.exit(0);
