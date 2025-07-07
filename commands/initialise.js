@@ -1,7 +1,21 @@
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const fs = require('fs/promises');
 const path = require('path');
 const readline = require('readline');
+
+function execCommand(command, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = exec(command, options, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+    child.stdout?.pipe(process.stdout);
+    child.stderr?.pipe(process.stderr);
+  });
+}
 
 function promptYesOnly(question) {
   const rl = readline.createInterface({
@@ -45,8 +59,6 @@ async function updateConfigWithCommitHash(cloneDir, commitHash) {
   try {
     let content = await fs.readFile(configPath, 'utf8');
 
-    // Regex to find SC_CONFIG object literal start and end (naive approach)
-    // We'll look for: const SC_CONFIG = { ... };
     const scConfigRegex = /const\s+SC_CONFIG\s*=\s*{([\s\S]*?)^};/m;
 
     const match = content.match(scConfigRegex);
@@ -57,11 +69,9 @@ async function updateConfigWithCommitHash(cloneDir, commitHash) {
 
     let scConfigBody = match[1];
 
-    // Remove any existing CLI_INSTALL_HASH block (comment + property)
     const cliHashBlockRegex = /\n\s*\/\*\*\n\s*\* =+ CLI - do not edit =+\n\s*\* =+\n\s*\*\/\n\s*CLI_INSTALL_HASH\s*:\s*['"`][a-f0-9]+['"`],?\n?/;
     scConfigBody = scConfigBody.replace(cliHashBlockRegex, '');
 
-    // Prepare the new CLI_INSTALL_HASH block with comment and formatting
     const cliHashBlock = `
 
   /**
@@ -73,11 +83,8 @@ async function updateConfigWithCommitHash(cloneDir, commitHash) {
 
 `;
 
-    // Insert the block at the end before closing brace
-    // Remove trailing whitespace/newlines before adding
     scConfigBody = scConfigBody.trimEnd() + cliHashBlock;
 
-    // Rebuild SC_CONFIG declaration
     const newSCConfig = `const SC_CONFIG = {${scConfigBody}};`;
 
     content = content.replace(scConfigRegex, newSCConfig);
@@ -107,66 +114,17 @@ async function moveAllFilesForce(srcDir, destDir) {
   await fs.rmdir(srcDir);
 }
 
-/**
- * Runs git clone with spinner animation.
- * Pauses spinner when SSH password prompt is detected.
- */
-function gitCloneWithSpinner(repoUrl, targetDir, spinnerFrames) {
+function gitClone(repoUrl, targetDir) {
   return new Promise((resolve, reject) => {
-    let spinnerIndex = 0;
-    let spinnerInterval;
-
     const gitProcess = spawn('git', ['clone', '--depth', '1', repoUrl, targetDir], {
-      stdio: ['inherit', 'pipe', 'pipe']
-    });
-
-    // Start spinner
-    spinnerInterval = setInterval(() => {
-      process.stdout.write(`\b${spinnerFrames[spinnerIndex]}`);
-      spinnerIndex = (spinnerIndex + 1) % spinnerFrames.length;
-    }, 100);
-
-    // Flags to detect password prompt and cloning progress
-    let waitingForPassword = false;
-    let cloningStarted = false;
-
-    // Listen for stderr data (git prompts password here)
-    gitProcess.stderr.on('data', data => {
-      const str = data.toString();
-
-      // Detect password prompt (common phrases)
-      if (/Enter passphrase for key/.test(str) || /Password for/.test(str)) {
-        if (!waitingForPassword) {
-          waitingForPassword = true;
-          clearInterval(spinnerInterval);
-          process.stdout.write('\b'); // Erase spinner
-          console.log('\nSSH key password prompt detected. Please enter your password:');
-        }
-      }
-    });
-
-    // Listen for stdout data (cloning progress)
-    gitProcess.stdout.on('data', data => {
-      if (waitingForPassword) {
-        // Password was entered, cloning resumed
-        waitingForPassword = false;
-        spinnerInterval = setInterval(() => {
-          process.stdout.write(`\b${spinnerFrames[spinnerIndex]}`);
-          spinnerIndex = (spinnerIndex + 1) % spinnerFrames.length;
-        }, 100);
-      }
-      cloningStarted = true;
+      stdio: 'inherit'
     });
 
     gitProcess.on('error', err => {
-      clearInterval(spinnerInterval);
-      process.stdout.write('\b');
       reject(err);
     });
 
     gitProcess.on('close', code => {
-      clearInterval(spinnerInterval);
-      process.stdout.write('\b'); // Erase spinner
       if (code === 0) {
         resolve();
       } else {
@@ -179,7 +137,6 @@ function gitCloneWithSpinner(repoUrl, targetDir, spinnerFrames) {
 async function initialise() {
   const cwd = process.cwd();
   const tempDir = path.join(cwd, '.sc-core-install');
-  const spinnerFrames = ['|', '/', '-', '\\'];
 
   try {
     console.log(`Starting initialise in directory: ${cwd}`);
@@ -206,27 +163,22 @@ async function initialise() {
     }
 
     console.log(`Cloning repository into temporary folder '${tempDir}' ...`);
-    process.stdout.write('Cloning in progress... ');
-
-    await gitCloneWithSpinner('git@github.com:glowplug-studio/supacharger-demo.git', tempDir, spinnerFrames);
+    await gitClone('git@github.com:glowplug-studio/supacharger-demo.git', tempDir);
 
     console.log('Done.');
 
-    // Get latest commit hash from cloned repo
     const { stdout: commitHash } = await execCommand('git rev-parse HEAD', { cwd: tempDir });
     const trimmedHash = commitHash.trim();
 
-    // Remove .git directory from cloned folder before moving files
     await removeGitDir(tempDir);
 
-    // Update supacharger-config.ts with CLI_INSTALL_HASH property and comment block
     await updateConfigWithCommitHash(tempDir, trimmedHash);
 
     console.log('Moving files from temporary folder up to current directory ...');
     await moveAllFilesForce(tempDir, cwd);
     console.log('Files moved successfully.');
 
-    console.log('Initialise completed successfully.');
+    console.log('Initialise completed successfully. You should now commit changes to your main branch.');
   } catch (err) {
     console.error('Error during initialise:', err);
     process.exit(1);
