@@ -54,19 +54,53 @@ async function readCliInstallHash(configPath) {
   }
 }
 
+/**
+ * Update or insert CLI_INSTALL_HASH inside SC_CONFIG object in supacharger-config.ts.
+ * If SC_CONFIG or CLI_INSTALL_HASH is missing, insert appropriately.
+ */
 async function updateCliInstallHash(configPath, newHash) {
-  // Read config file content
   let content = await fs.readFile(configPath, 'utf8');
 
-  // Replace CLI_INSTALL_HASH with new hash
-  const newContent = content.replace(
-    /CLI_INSTALL_HASH\s*:\s*['"`][a-f0-9]+['"`]/,
-    `CLI_INSTALL_HASH: '${newHash}'`
-  );
+  // Regex to find SC_CONFIG object (multiline)
+  const scConfigRegex = /(const\s+SC_CONFIG\s*=\s*{)([\s\S]*?)(^};)/m;
 
-  // Write back updated content
-  await fs.writeFile(configPath, newContent, 'utf8');
-  console.log(`\x1b[32mUpdated CLI_INSTALL_HASH in supacharger-config.ts to ${newHash}\x1b[0m`);
+  // CLI_INSTALL_HASH property block with comment
+  const cliHashBlock = `
+  /**
+   * ==========
+   * CLI - do not edit
+   * ==========
+   */
+  CLI_INSTALL_HASH: '${newHash}',`;
+
+  const match = content.match(scConfigRegex);
+  if (match) {
+    let prefix = match[1]; // "const SC_CONFIG = {"
+    let body = match[2];   // content inside SC_CONFIG
+    let suffix = match[3]; // "};"
+
+    // Regex to find existing CLI_INSTALL_HASH block inside SC_CONFIG
+    const cliHashRegex = /\n\s*\/\*\*\n\s*\* =+ CLI - do not edit =+\n\s*\* =+\n\s*\*\/\n\s*CLI_INSTALL_HASH\s*:\s*['"`][a-f0-9]+['"`],?/m;
+
+    if (cliHashRegex.test(body)) {
+      // Replace existing CLI_INSTALL_HASH block
+      body = body.replace(cliHashRegex, cliHashBlock);
+      console.log(`\x1b[34mUpdated CLI_INSTALL_HASH inside SC_CONFIG in supacharger-config.ts to ${newHash}\x1b[0m`);
+    } else {
+      // Insert CLI_INSTALL_HASH block before closing brace
+      body = body.trimEnd() + cliHashBlock + '\n';
+      console.log(`\x1b[34mInserted CLI_INSTALL_HASH inside SC_CONFIG in supacharger-config.ts: ${newHash}\x1b[0m`);
+    }
+
+    // Rebuild content
+    content = content.replace(scConfigRegex, `${prefix}${body}${suffix}`);
+  } else {
+    // SC_CONFIG not found, append CLI_INSTALL_HASH block at file end
+    content += cliHashBlock + '\n';
+    console.log(`\x1b[34mSC_CONFIG not found. Appended CLI_INSTALL_HASH block to supacharger-config.ts: ${newHash}\x1b[0m`);
+  }
+
+  await fs.writeFile(configPath, content, 'utf8');
 }
 
 async function getRemoteMainHash() {
@@ -293,7 +327,7 @@ Enter Y to continue: \u001b[0m`;
     }
 
     if (missingFiles.length === 0 && differentFiles.length === 0) {
-      console.log('Local files match the state of the remote at the CLI_INSTALL_HASH commit.');
+      console.log('\x1b[32m✓ Local files match the state of the remote CLI_INSTALL_HASH commit.\x1b[0m');
       console.log('Proceeding to clone the latest main branch into the update directory.');
 
       // Clean and clone latest main branch
@@ -301,7 +335,7 @@ Enter Y to continue: \u001b[0m`;
       await cloneLatestMain(updateDir);
     } else {
       console.log(
-        '\x1b[41m\x1b[97m CONFLICTS! \x1b[0m \x1b[34m\nThe following files have been modified or are missing:\x1b[0m'
+        '\x1b[41m\x1b[97m CONFLICTS! \x1b[0m \x1b[34m\nThe following core files have been modified or are missing:\x1b[0m'
       );
 
       missingFiles.forEach((f) => console.log(`  - \x1b[33mMISSING\x1b[0m: ${f}`));
