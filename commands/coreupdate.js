@@ -33,14 +33,14 @@ function askYesNo(question) {
   });
 }
 
-// Helper function to repeatedly ask for a valid action
+// Helper function to repeatedly ask for a valid action, now includes 'OB'
 async function askAction(prompt) {
   while (true) {
     const answer = (await askYesNo(prompt)).toUpperCase();
-    if (['O', 'S', 'E'].includes(answer)) {
+    if (['O', 'S', 'E', 'OB'].includes(answer)) {
       return answer;
     }
-    console.log('\x1b[31mInvalid input. Please enter O, S, or E.\x1b[0m');
+    console.log('\x1b[31mInvalid input. Please enter O, S, OB, or E.\x1b[0m');
   }
 }
 
@@ -192,11 +192,31 @@ async function moveFileToRoot(updateDir, relPath, rootDir) {
   await fs.rename(path.join(updateDir, relPath), destPath);
 }
 
+async function backupConflicts(updateDir, rootDir, conflictFiles) {
+  for (const relPath of conflictFiles) {
+    const localFile = path.join(rootDir, relPath);
+    const dir = path.dirname(localFile);
+    const ext = path.extname(localFile);
+    const baseName = path.basename(localFile, ext);
+    // Construct backup filename with _ at start and _backup.tsx at end
+    const backupFileName = `_${baseName}_backup.tsx`;
+    const backupFile = path.join(dir, backupFileName);
+
+    try {
+      await fs.copyFile(localFile, backupFile);
+      console.log(`\x1b[33mBacked up conflict file:\x1b[0m ${relPath} -> ${path.relative(rootDir, backupFile)}`);
+    } catch (err) {
+      console.warn(`\x1b[31mFailed to backup file:\x1b[0m ${relPath}: ${err.message}`);
+    }
+  }
+}
+
+
 // Clone latest main branch fully (used when no conflicts)
 async function cloneLatestMain(updateDir) {
   await removeDirContents(updateDir);
 
-  console.log('\x1b[34mProceeding to clone the main branch latest commit  into the update directory.\x1b[0m');
+  console.log('\x1b[34mProceeding to clone the main branch latest commit into the update directory.\x1b[0m');
 
   await execCommand(
     `git clone --depth 1 --branch main git@github.com:glowplug-studio/supacharger-demo.git "${updateDir}"`
@@ -259,18 +279,15 @@ Enter Y to continue: \u001b[0m`;
 
     if (localHash === remoteHash) {
       console.log('\x1b[32m✓ Local files match the state of the remote CLI_INSTALL_HASH commit.\x1b[0m');
-      // Remove old contents, clone latest main, move files up, update hash, remove update dir
       await removeDirContents(updateDir);
       await cloneLatestMain(updateDir);
       await moveFiles(updateDir, cwd);
       await updateCliInstallHash(localConfigPath, remoteHash);
       await fs.rm(updateDir, { recursive: true, force: true });
-
       console.log('\x1b[32mUpdate complete and .sc-core-update folder removed.\x1b[0m');
       return;
     }
 
-    // Prepare update directory for integrity check
     await fs.rm(updateDir, { recursive: true, force: true });
     await fs.mkdir(updateDir, { recursive: true });
     console.log(`\x1b[34mCreated or cleaned directory:\x1b[0m \x1b[32m${updateDir}\x1b[0m`);
@@ -309,13 +326,11 @@ Enter Y to continue: \u001b[0m`;
 
     if (missingFiles.length === 0 && differentFiles.length === 0) {
       console.log('\x1b[32m✓ Local files match the state of the remote CLI_INSTALL_HASH commit.\x1b[0m');
-      // Remove old contents, clone latest main, move files up, update hash, remove update dir
       await removeDirContents(updateDir);
       await cloneLatestMain(updateDir);
       await moveFiles(updateDir, cwd);
       await updateCliInstallHash(localConfigPath, remoteHash);
       await fs.rm(updateDir, { recursive: true, force: true });
-
       console.log('\x1b[32mUpdate complete and .sc-core-update folder removed.\x1b[0m');
       return;
     }
@@ -331,32 +346,39 @@ Enter Y to continue: \u001b[0m`;
 \x1b[34mchoose action:
 \x1b[31m(O)\x1b[34m overwrite all
 \x1b[33m(S)\x1b[34m skip conflict files overwrite the rest
+\x1b[36m(OB)\x1b[34m overwrite all with backup of conflict files
 \x1b[35m(E)\x1b[0m exit
 \x1b[34mYour choice: \x1b[0m`;
 
-    const action = await askAction(prompt);
+    const action = (await askYesNo(prompt)).toUpperCase();
 
     if (action === 'E') {
       console.log('\x1b[34mExiting without changes.\x1b[0m');
       process.exit(0);
     }
 
-    // Clean update directory and clone latest main branch at latestHash
+    if (action !== 'O' && action !== 'S' && action !== 'OB') {
+      console.log('\x1b[31mInvalid choice. Exiting.\x1b[0m');
+      process.exit(1);
+    }
+
     await fs.rm(updateDir, { recursive: true, force: true });
     await fs.mkdir(updateDir, { recursive: true });
     await cloneAndCheckout(updateDir, remoteHash);
 
-    // Move files according to action
-    if (action === 'O') {
+    if (action === 'OB') {
+      // Backup conflicting files first
+      await backupConflicts(cwd, cwd, differentFiles);
+      // Then move all files (including conflicts)
+      await moveFiles(updateDir, cwd);
+    } else if (action === 'O') {
       await moveFiles(updateDir, cwd);
     } else if (action === 'S') {
       await moveFiles(updateDir, cwd, differentFiles);
     }
 
-    // Update CLI_INSTALL_HASH in config to latestHash
     await updateCliInstallHash(localConfigPath, remoteHash);
 
-    // Remove the update directory completely
     await fs.rm(updateDir, { recursive: true, force: true });
 
     console.log('\x1b[32mUpdate complete and .sc-core-update folder removed.\x1b[0m');
