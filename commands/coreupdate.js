@@ -199,17 +199,17 @@ Enter Y to continue: \u001b[0m`;
     await fs.mkdir(updateDir, { recursive: true });
     console.log(`\x1b[34mCreated or cleaned directory:\x1b[0m \x1b[32m${updateDir}\x1b[0m`);
 
-    await execCommand(
-      `git -C .sc-core-update config advice.detachedHead false`
-    );
-
     // Clone main branch without checkout
     await execCommand(
       `git clone --no-checkout --branch main git@github.com:glowplug-studio/supacharger-demo.git "${updateDir}"`
     );
 
+    await execCommand(
+      `git -C ${updateDir} config advice.detachedHead false`
+    );
+
     // Checkout specific commit (CLI_INSTALL_HASH only)
-    await execCommand(`git -C "${updateDir}" checkout ${localHash}`);
+    await execCommand(`git -C ${updateDir} checkout ${localHash}`);
 
     // Remove .git directory
     await removeGitDir(updateDir);
@@ -218,7 +218,7 @@ Enter Y to continue: \u001b[0m`;
     console.log('\x1b[34m\nChecking Core Integrity...\x1b[0m');
 
     spinnerInterval = setInterval(() => {
-      process.stdout.write(`\rChecking Core Integrity... ${spinnerFrames[spinnerIndex]} `);
+      process.stdout.write(`\rChecking Core Integrity... Comparing local core to remote. ${spinnerFrames[spinnerIndex]} `);
       spinnerIndex = (spinnerIndex + 1) % spinnerFrames.length;
     }, 100);
 
@@ -259,26 +259,32 @@ Enter Y to continue: \u001b[0m`;
       await removeDirContents(updateDir);
       await cloneLatestMain(updateDir);
     } else {
-      console.log('\x1b[34m\nThe following files have been modified or are missing:\x1b[0m');
+      console.log('\x1b[41m\x1b[97m CONFLICTS! \x1b[0m \x1b[34m\nThe following files have been modified or are missing:\x1b[0m');
 
       missingFiles.forEach((f) => console.log(`  - \x1b[33mMISSING\x1b[0m: ${f}`));
 
       differentFiles.forEach((f) => console.log(`  - \x1b[31mMODIFIED\x1b[0m: ${f}`));
 
 
-      const prompt = '\n\x1b[34mChoose action: Overwrite all (\x1b[31mo\x1b[34m), Skip update (\x1b[33ms\x1b[34m), Exit (\x1b[34me\x1b[0m): ';
-      const action = await askYesNo(prompt);
-      
+      const prompt = `
+      \x1b[34mChoose action:\x1b[0m
+      \x1b[31m- OVERWRITE ALL (O)\x1b[0m
+      \x1b[33m- SKIP CONFLICT FILES OVERWRITE THE REST (S)\x1b[0m
+      \x1b[34m- EXIT (E)\x1b[0m
+      Your choice: `;
 
-      if (action === 'o' || action === 's') {
-        console.log(`You chose to ${action === 'o' ? 'overwrite' : 'skip'} the update.`);
+      const action = await askYesNo(prompt);
+
+      if (action === 'O' || action === 'S') {
+        console.log(`You chose to ${action === 'O' ? 'overwrite' : 'skip'} the update.`);
 
         await removeDirContents(updateDir);
         await cloneLatestMain(updateDir);
 
         console.log('Update directory reset with latest main branch.');
+
       } else {
-        console.log('Exiting without changes.');
+        console.log('\x1b[34mExiting without changes.\x1b[0m');
         process.exit(0);
       }
     }
