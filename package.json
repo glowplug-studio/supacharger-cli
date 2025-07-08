@@ -1,6 +1,6 @@
 {
   "name": "@glowplug/supacharger-cli",
-  "version": "1.0.002",
+  "version": "1.0.01",
   "description": "Developer CLI for managing Supacharger locally.",
   "dependencies": {
     "commander": "^13.1.0"
