@@ -390,6 +390,7 @@ test('installs missing account adapter starters without overwriting developer cu
     'presentation.ts',
     'profile-extension.ts',
     'profile-fields.tsx',
+    'security-page.tsx',
   ].map((file) => path.join(adapterDirectory, file));
 
   for (const relativePath of adapters) {

@@ -21,6 +21,7 @@ const ACCOUNT_ADAPTER_FILES = [
   'presentation.ts',
   'profile-extension.ts',
   'profile-fields.tsx',
+  'security-page.tsx',
 ].map((file) => path.join('src', 'supacharger.adapters', 'account', file));
 const DEVELOPER_STARTERS = [AUTH_STYLES_FILE, AUTH_SIDECAR_FILE, ...ACCOUNT_ADAPTER_FILES];
 const LEGACY_AUTH_ROUTE_FILES = [
