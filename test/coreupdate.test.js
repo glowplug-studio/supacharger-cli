@@ -406,6 +406,23 @@ test('installs missing account adapter starters without overwriting developer cu
   assert.equal(await fs.readFile(path.join(root, adapters[1]), 'utf8'), 'developer navigation\n');
 });
 
+test('installs missing billing adapter starters without overwriting developer customisations', async (t) => {
+  const root = await temporaryDirectory(t);
+  const update = await temporaryDirectory(t);
+  const adapterDirectory = path.join('src', 'supacharger.adapters', 'billing');
+  const adapters = ['acquisition.tsx', 'database.ts', 'organisation.ts'].map((file) => path.join(adapterDirectory, file));
+
+  for (const relativePath of adapters) {
+    await fs.mkdir(path.dirname(path.join(update, relativePath)), { recursive: true });
+    await fs.writeFile(path.join(update, relativePath), `starter ${relativePath}\n`);
+  }
+  await fs.mkdir(path.dirname(path.join(root, adapters[2])), { recursive: true });
+  await fs.writeFile(path.join(root, adapters[2]), 'developer organisation billing\n');
+
+  assert.deepEqual(await installMissingDeveloperStarters(update, root), [adapters[0], adapters[1]]);
+  assert.equal(await fs.readFile(path.join(root, adapters[2]), 'utf8'), 'developer organisation billing\n');
+});
+
 test('moves unchanged legacy auth routes out of the developer route group and rejects modified routes', async (t) => {
   const root = await temporaryDirectory(t);
   const baseline = await temporaryDirectory(t);

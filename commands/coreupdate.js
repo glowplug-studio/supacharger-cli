@@ -25,7 +25,14 @@ const ACCOUNT_ADAPTER_FILES = [
   'profile-fields.tsx',
   'security-page.tsx',
 ].map((file) => path.join('src', 'supacharger.adapters', 'account', file));
-const DEVELOPER_STARTERS = [AUTH_STYLES_FILE, AUTH_SIDECAR_FILE, ...ACCOUNT_ADAPTER_FILES];
+const BILLING_ADAPTER_FILES = ['acquisition.tsx', 'database.ts', 'organisation.ts']
+  .map((file) => path.join('src', 'supacharger.adapters', 'billing', file));
+const DEVELOPER_STARTERS = [
+  AUTH_STYLES_FILE,
+  AUTH_SIDECAR_FILE,
+  ...ACCOUNT_ADAPTER_FILES,
+  ...BILLING_ADAPTER_FILES,
+];
 const LEGACY_AUTH_ROUTE_FILES = [
   path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'layout.tsx'),
   path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'login', 'page.tsx'),
