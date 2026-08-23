@@ -18,6 +18,14 @@ async function readIfPresent(filePath) {
   }
 }
 
+function parseJson(source) {
+  try {
+    return JSON.parse(source);
+  } catch {
+    return null;
+  }
+}
+
 function readObjectBlock(source, objectName) {
   const match = new RegExp(`\\b${objectName}\\s*:`).exec(source);
   if (!match) return '';
@@ -198,7 +206,13 @@ async function inspect(rootDir = process.cwd()) {
   const claimsMigration = await findClaimsMigration(rootDir);
   const organisationMigration = await findOrganisationMigration(rootDir);
   const rpcArgumentMigration = await findRpcArgumentMigration(rootDir);
-  const managedManifest = await readIfPresent(path.join(rootDir, '.supacharger', 'managed-files.json'));
+  const managedManifestSource = await readIfPresent(path.join(rootDir, '.supacharger', 'managed-files.json'));
+  const managedManifest = parseJson(managedManifestSource);
+  const postUpdateChecks = managedManifest?.postUpdateChecks ?? [];
+  const requiredPackageScripts = postUpdateChecks.filter((check) => check !== 'typecheck');
+  const brunoCheckerPath = path.join('scripts', 'check-bruno-rpc-parity.mjs');
+  const brunoCollectionPath = path.join('docs', 'bruno', 'supacharger-rpc');
+  const managedPaths = managedManifest?.managedPaths ?? [];
 
   const onboardingPolicy = readRecoveryPolicy(applicationConfig, 'POST_SIGN_IN_ONBOARDING');
   const billingPolicy = readRecoveryPolicy(applicationConfig, 'BILLING_ACCESS');
@@ -290,9 +304,26 @@ async function inspect(rootDir = process.cwd()) {
     {
       name: 'Managed-file ownership manifest',
       ok:
-        managedManifest.includes('managedPaths') &&
-        managedManifest.includes('developerOwnedPaths') &&
-        managedManifest.includes('postUpdateChecks'),
+        Array.isArray(managedManifest?.managedPaths) &&
+        Array.isArray(managedManifest?.developerOwnedPaths) &&
+        Array.isArray(managedManifest?.postUpdateChecks),
+    },
+    {
+      name: 'Required post-update package scripts',
+      ok: requiredPackageScripts.every(
+        (script) => typeof packageJson.scripts?.[script] === 'string' && packageJson.scripts[script].trim() !== ''
+      ),
+      detail: requiredPackageScripts.join(', ') || 'none',
+    },
+    {
+      name: 'Managed Bruno RPC parity assets',
+      ok:
+        postUpdateChecks.includes('check:bruno-rpcs') &&
+        managedPaths.includes(brunoCheckerPath) &&
+        managedPaths.includes(brunoCollectionPath) &&
+        await exists(path.join(rootDir, brunoCheckerPath)) &&
+        await exists(path.join(rootDir, brunoCollectionPath)) &&
+        packageJson.scripts?.['check:bruno-rpcs'] === 'node scripts/check-bruno-rpc-parity.mjs',
     },
     {
       name: 'Public Supabase environment contract',

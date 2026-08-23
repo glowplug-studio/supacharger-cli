@@ -423,6 +423,37 @@ test('installs changed dependencies and verifies changed migrations before compl
   assert.ok(commands.every(({ cwd }) => cwd === root));
 });
 
+test('installs missing required Core scripts without overwriting consumer scripts', async (t) => {
+  const root = await temporaryDirectory(t);
+  const update = await temporaryDirectory(t);
+  const currentPackage = {
+    name: 'consumer',
+    scripts: { 'test:billing-schema': 'node test/shared.mjs && node test/project.mjs' },
+    dependencies: {},
+  };
+  const incomingPackage = {
+    name: 'supacharger',
+    scripts: {
+      'test:billing-schema': 'node test/shared.mjs',
+      'check:bruno-rpcs': 'node scripts/check-bruno-rpc-parity.mjs',
+    },
+    dependencies: {},
+  };
+
+  await fs.writeFile(path.join(root, 'package.json'), `${JSON.stringify(currentPackage)}\n`);
+  await fs.writeFile(path.join(update, 'package.json'), `${JSON.stringify(incomingPackage)}\n`);
+
+  const assessment = await assessPostUpdateWork(root, update, {
+    postUpdateChecks: ['check:bruno-rpcs'],
+  });
+  assert.deepEqual(assessment.missingRequiredScripts, ['check:bruno-rpcs']);
+
+  await runPostUpdateSteps(root, assessment);
+  const mergedPackage = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+  assert.equal(mergedPackage.scripts['check:bruno-rpcs'], 'node scripts/check-bruno-rpc-parity.mjs');
+  assert.equal(mergedPackage.scripts['test:billing-schema'], 'node test/shared.mjs && node test/project.mjs');
+});
+
 test('fails completion when the linked migration ledger omits an updated migration', async (t) => {
   const root = await temporaryDirectory(t);
   const update = await temporaryDirectory(t);
@@ -566,7 +597,10 @@ test('plans managed writes and obsolete removals without changing the project', 
     await fs.mkdir(path.join(directory, '.supacharger'), { recursive: true });
     await fs.mkdir(path.join(directory, 'src', 'supacharger'), { recursive: true });
     await fs.writeFile(path.join(directory, '.supacharger', 'managed-files.json'), JSON.stringify(manifest));
-    await fs.writeFile(path.join(directory, 'package.json'), '{"name":"fixture","dependencies":{}}\n');
+    await fs.writeFile(
+      path.join(directory, 'package.json'),
+      '{"name":"fixture","scripts":{"lint":"eslint ."},"dependencies":{}}\n'
+    );
   }
   await fs.writeFile(path.join(root, 'src', 'supacharger', 'changed.ts'), 'old\n');
   await fs.writeFile(path.join(baseline, 'src', 'supacharger', 'changed.ts'), 'old\n');

@@ -6,6 +6,19 @@ Generated or upgraded PostgreSQL functions and PostgREST RPCs must not prefix ex
 
 Keep exact managed contract tests limited to reusable Supacharger behaviour. Preserve `test/project-billing-schema-contract.test.mjs` as a developer-owned consumer seam, and preserve consumer package scripts that add the project test alongside the shared managed test.
 
+<!-- BEGIN:shared-bruno-rpc-guidance -->
+
+## Bruno RPC maintenance
+
+- Treat `docs/bruno/supacharger-rpc/` and `scripts/check-bruno-rpc-parity.mjs` as exact CLI-managed Core assets. Keep them byte-identical to the installed Core lock in every managed consumer.
+- Add, update, rename, or remove the matching canonical Bruno request in the same change as every reusable client-callable `api` RPC contract change. Keep method, URL, schema headers, authentication, arguments, body, example, response expectations, status behaviour, and embedded documentation aligned.
+- Run `npm run check:bruno-rpcs` before reporting an RPC or Core-alignment task complete. The Core check requires documentation for every current Core `api` RPC. In a consumer it requires every canonical Supacharger RPC while allowing additional product-owned RPCs.
+- Keep consumer-specific RPC requests in the owning application's developer-managed Bruno collection and verification command. Do not add them to `docs/bruno/supacharger-rpc/` unless the RPC is first approved and implemented as a reusable Core contract.
+- Never commit access tokens, service-role keys, secret keys, or customer data to a Bruno request or environment.
+- The CLI must install the shared checker, collection, and missing required package script, run the declared parity check, and refuse to advance `.supacharger/core-lock.json` when parity fails.
+
+<!-- END:shared-bruno-rpc-guidance -->
+
 <!-- BEGIN:shared-svg-svgr-guidance -->
 
 ## UI SVGs and SVGR

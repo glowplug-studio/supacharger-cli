@@ -578,6 +578,41 @@ async function mergeDependencyContract(rootDir, incomingPackage) {
   }
 }
 
+function requiredPackageScripts(incomingPackage, postUpdateChecks = []) {
+  return Object.fromEntries(
+    postUpdateChecks
+      .filter((check) => check !== 'typecheck')
+      .map((check) => {
+        const command = incomingPackage.scripts?.[check];
+        if (typeof command !== 'string' || command.trim() === '') {
+          throw new Error(`Core package.json does not define required post-update script: ${check}`);
+        }
+        return [check, command];
+      })
+  );
+}
+
+async function mergeRequiredPackageScripts(rootDir, requiredScripts) {
+  const packagePath = path.join(rootDir, 'package.json');
+  const currentPackage = await readJson(packagePath);
+  const scripts = { ...(currentPackage.scripts ?? {}) };
+  let changed = false;
+
+  for (const [name, command] of Object.entries(requiredScripts)) {
+    if (typeof scripts[name] === 'string' && scripts[name].trim() !== '') continue;
+    scripts[name] = command;
+    changed = true;
+  }
+
+  if (changed) {
+    await fs.writeFile(
+      packagePath,
+      `${JSON.stringify({ ...currentPackage, scripts }, null, 2)}\n`,
+      'utf8'
+    );
+  }
+}
+
 async function installForwardOnlyMigrations(rootDir, assessment) {
   for (const migration of assessment.changedMigrations) {
     const sourcePath = path.join(assessment.incomingRoot, migration.path);
@@ -636,12 +671,19 @@ async function assessPostUpdateWork(rootDir, updateDir, options = {}) {
     }
   }
 
+  const requiredScripts = requiredPackageScripts(incomingPackage, options.postUpdateChecks);
+  const missingRequiredScripts = Object.keys(requiredScripts).filter(
+    (name) => typeof currentPackage.scripts?.[name] !== 'string' || currentPackage.scripts[name].trim() === ''
+  );
+
   return {
     dependencyChanged: dependencyContractChanged(currentPackage, incomingPackage),
     incomingPackage,
     incomingRoot: updateDir,
     incomingFiles,
     changedMigrations,
+    requiredScripts,
+    missingRequiredScripts,
   };
 }
 
@@ -702,6 +744,11 @@ async function verifyPostUpdateFiles(rootDir, assessment) {
   if (dependencyContractChanged(currentPackage, assessment.incomingPackage)) {
     throw new Error('The incoming dependency contract was not merged into package.json.');
   }
+  for (const name of Object.keys(assessment.requiredScripts ?? {})) {
+    if (typeof currentPackage.scripts?.[name] !== 'string' || currentPackage.scripts[name].trim() === '') {
+      throw new Error(`Required post-update package script was not installed: ${name}`);
+    }
+  }
   for (const migration of assessment.changedMigrations) {
     if ((await hashFile(path.join(rootDir, migration.path))) !== migration.hash) {
       throw new Error(`Required migration was not installed: ${migration.path}`);
@@ -713,6 +760,7 @@ async function runPostUpdateSteps(rootDir, assessment, options = {}) {
   const run = options.run ?? execCommand;
   const confirm = options.confirm ?? askYesNo;
   await mergeDependencyContract(rootDir, assessment.incomingPackage);
+  await mergeRequiredPackageScripts(rootDir, assessment.requiredScripts ?? {});
   await installForwardOnlyMigrations(rootDir, assessment);
   await verifyPostUpdateFiles(rootDir, assessment);
 
@@ -906,6 +954,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     assessPostUpdateWork(rootDir, latestDir, {
       baselineMigrationHashes,
       forwardOnlyMigrationPaths: latestManifest?.forwardOnlyMigrationPaths,
+      postUpdateChecks: latestManifest?.postUpdateChecks,
     }),
     migrateAuthProviderConfig(rootDir, { plan: true }),
     migrateLegacyAuthSessionConfig(rootDir, { plan: true }),
@@ -953,6 +1002,8 @@ async function printPlan(rootDir, installState) {
     console.log(`Obsolete managed removals: ${plan.removals.length}`);
     plan.removals.forEach((file) => console.log(`  REMOVE ${file}`));
     console.log(`Dependency contract changed: ${plan.assessment.dependencyChanged ? 'yes' : 'no'}`);
+    console.log(`Missing required package scripts: ${plan.assessment.missingRequiredScripts.length}`);
+    plan.assessment.missingRequiredScripts.forEach((script) => console.log(`  SCRIPT ${script}`));
     console.log(`Changed migrations: ${plan.assessment.changedMigrations.length}`);
     plan.assessment.changedMigrations.forEach(({ path: migration }) => console.log(`  MIGRATION ${migration}`));
     console.log(`Manual merge-managed changes: ${plan.manualMergeChanges.length}`);
@@ -1077,6 +1128,7 @@ Enter Y to continue: \u001b[0m`;
       const assessment = await assessPostUpdateWork(cwd, updateDir, {
         baselineMigrationHashes,
         forwardOnlyMigrationPaths: latestManifest?.forwardOnlyMigrationPaths,
+        postUpdateChecks: latestManifest?.postUpdateChecks,
       });
       const latestManagedHashes = await managedFileHashes(updateDir, latestManagedFiles);
       const preservedPaths = latestManifest?.developerOwnedPaths ?? DEVELOPER_OWNED_PATHS;
@@ -1148,6 +1200,7 @@ Enter Y to continue: \u001b[0m`;
     const assessment = await assessPostUpdateWork(cwd, updateDir, {
       baselineMigrationHashes,
       forwardOnlyMigrationPaths: latestManifest?.forwardOnlyMigrationPaths,
+      postUpdateChecks: latestManifest?.postUpdateChecks,
     });
     const latestManagedHashes = await managedFileHashes(updateDir, latestManagedFiles);
 
@@ -1216,6 +1269,7 @@ coreupdate.testHelpers = {
   migrateRootDocumentConfig,
   moveFiles,
   mergeDependencyContract,
+  mergeRequiredPackageScripts,
   managedFiles,
   managedFileHashes,
   readManagedManifest,
@@ -1224,6 +1278,7 @@ coreupdate.testHelpers = {
   readInstallState,
   runPostUpdateSteps,
   runPostUpdateChecks,
+  requiredPackageScripts,
   verifyManagedFiles,
   verifyPostUpdateFiles,
   writeCoreLock,

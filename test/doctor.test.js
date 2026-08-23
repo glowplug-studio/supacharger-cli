@@ -15,7 +15,10 @@ test('recognises the canonical Supabase authentication contract', async (t) => {
   await fs.mkdir(path.join(root, '.supacharger'), { recursive: true });
   await fs.writeFile(
     path.join(root, 'package.json'),
-    JSON.stringify({ dependencies: { next: '16.3.0', '@supabase/ssr': '0.12.4', '@supabase/supabase-js': '2.112.3' } })
+    JSON.stringify({
+      scripts: { 'check:bruno-rpcs': 'node scripts/check-bruno-rpc-parity.mjs' },
+      dependencies: { next: '16.3.0', '@supabase/ssr': '0.12.4', '@supabase/supabase-js': '2.112.3' },
+    })
   );
   await fs.writeFile(path.join(root, 'next.config.ts'), 'export default {};\n');
   await fs.writeFile(path.join(root, 'src', 'proxy.ts'), 'export function proxy() {}\n');
@@ -68,8 +71,15 @@ BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?ful
   );
   await fs.writeFile(
     path.join(root, '.supacharger', 'managed-files.json'),
-    '{"managedPaths":[],"developerOwnedPaths":[],"postUpdateChecks":[]}\n'
+    JSON.stringify({
+      managedPaths: ['docs/bruno/supacharger-rpc', 'scripts/check-bruno-rpc-parity.mjs'],
+      developerOwnedPaths: [],
+      postUpdateChecks: ['check:bruno-rpcs'],
+    })
   );
+  await fs.mkdir(path.join(root, 'docs', 'bruno', 'supacharger-rpc'), { recursive: true });
+  await fs.mkdir(path.join(root, 'scripts'), { recursive: true });
+  await fs.writeFile(path.join(root, 'scripts', 'check-bruno-rpc-parity.mjs'), '// checker\n');
   await fs.writeFile(
     path.join(root, '.env.example'),
     'NEXT_PUBLIC_SUPABASE_URL=\nNEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=\n'
@@ -87,6 +97,25 @@ test('reports missing hook and claims migration without reading secret values', 
   const checks = await inspect(root);
   assert.equal(checks.find((check) => check.name === 'Supabase custom access-token hook').ok, false);
   assert.equal(checks.find((check) => check.name === 'Custom claims migration').ok, false);
+});
+
+test('reports a missing managed Bruno package script and assets', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'supacharger-doctor-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, '.supacharger'), { recursive: true });
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ dependencies: {}, scripts: {} }));
+  await fs.writeFile(
+    path.join(root, '.supacharger', 'managed-files.json'),
+    JSON.stringify({
+      managedPaths: ['docs/bruno/supacharger-rpc', 'scripts/check-bruno-rpc-parity.mjs'],
+      developerOwnedPaths: [],
+      postUpdateChecks: ['check:bruno-rpcs'],
+    })
+  );
+
+  const checks = await inspect(root);
+  assert.equal(checks.find((check) => check.name === 'Required post-update package scripts').ok, false);
+  assert.equal(checks.find((check) => check.name === 'Managed Bruno RPC parity assets').ok, false);
 });
 
 test('reports enabled recovery routes that are missing or inherit the full-app guard', async (t) => {
