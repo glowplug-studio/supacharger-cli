@@ -9,13 +9,14 @@ const enableCommand = require('../commands/enable');
 const disableCommand = require('../commands/disable');
 const initialiseCommand = require('../commands/initialise');
 const coreupdateCommand = require('../commands/coreupdate');
+const doctorCommand = require('../commands/doctor');
+const { version } = require('../package.json');
 
 const program = new Command();
 
 async function isNextRoot(dir = process.cwd()) {
   try {
     const packageJsonPath = path.join(dir, 'package.json');
-    const nextConfigPath = path.join(dir, 'next.config.js');
 
     // Check package.json exists
     await fs.access(packageJsonPath);
@@ -29,8 +30,17 @@ async function isNextRoot(dir = process.cwd()) {
     };
     if (!deps || !deps.next) return false;
 
-    // Check next.config.js exists
-    await fs.access(nextConfigPath);
+    const nextConfigChecks = await Promise.all(
+      ['next.config.js', 'next.config.mjs', 'next.config.ts'].map(async (name) => {
+        try {
+          await fs.access(path.join(dir, name));
+          return true;
+        } catch {
+          return false;
+        }
+      })
+    );
+    if (!nextConfigChecks.some(Boolean)) return false;
 
     return true;
   } catch {
@@ -49,7 +59,7 @@ async function checkNextRootOrExit() {
 program
   .name('supacharger')
   .description('Developer CLI for managing Supacharger locally.')
-  .version('1.0.001');
+  .version(version);
 
 program
   .option('-s, --site <url>', 'Site URL')
@@ -159,30 +169,36 @@ program
 
 program
   .command('coreupdate')
-  .description('Clone latest supacharger-demo into .update folder and attempt to merge with current project')
-  .action(coreupdateCommand);
+  .description('Download the latest Supacharger core and check for local conflicts before updating')
+  .option('--plan', 'Show managed writes, removals, dependencies, migrations, and checks without changing the project')
+  .action((options) => coreupdateCommand(options));
 
-  program
-  .command('initialise')
-  .description('Clone latest supacharger-demo into current directory')
-  .action(initialiseCommand);
+program
+  .command('doctor')
+  .description('Check Supabase Proxy, Auth Hook, claims migration, environment, and dependency alignment')
+  .action(() => doctorCommand());
 
-  program
+program
+  .command('init [target]')
+  .description('Clone the latest Supacharger starter into a target directory (use "." for current directory)')
+  .action((target) => initialiseCommand(target ?? '.'));
+
+program
   .command('enable')
   .description('Enable command (not implemented yet)')
   .action(enableCommand);
 
 
-  program
+program
   .command('uninstall')
   .description('Uninstall command (not implemented yet)')
   .action(uninstallCommand);
 
 
-  program
+program
   .command('disable')
   .description('Disable command (not implemented yet)')
-  .action(disableCommand);;
+  .action(disableCommand);
 
 program.parse(process.argv);
 

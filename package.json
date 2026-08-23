@@ -1,14 +1,21 @@
 {
   "name": "@glowplug/supacharger-cli",
-  "version": "1.0.4",
+  "version": "2.0.0",
   "description": "Developer CLI for managing Supacharger locally.",
+  "packageManager": "npm@11.13.0",
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
-    "commander": "^13.1.0"
+    "commander": "15.0.0"
   },
   "bin": {
     "supacharger": "./bin/cli.js"
   },
-  "scripts": {},
+  "scripts": {
+    "check": "node --check bin/cli.js && node --check commands/coreupdate.js && node --check commands/doctor.js && node --check commands/initialise.js && node --test",
+    "test": "node --test"
+  },
   "keywords": [
     "cli",
     "git",
@@ -23,8 +30,8 @@
   "license": "MIT",
   "main": "bin/cli.js",
   "devDependencies": {
-    "eslint": "^9.29.0",
-    "eslint-plugin-simple-import-sort": "^12.1.1"
+    "eslint": "9.39.4",
+    "eslint-plugin-simple-import-sort": "14.0.0"
   },
   "repository": {
     "type": "git",
