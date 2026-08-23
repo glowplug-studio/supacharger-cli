@@ -18,7 +18,9 @@ const AUTH_SIDECAR_FILE = path.join('src', 'supacharger.adapters', 'auth', 'auth
 const ACCOUNT_ADAPTER_FILES = [
   'details-page.tsx',
   'navigation.ts',
+  'notifications.ts',
   'presentation.ts',
+  'privacy.ts',
   'profile-extension.ts',
   'profile-fields.tsx',
   'security-page.tsx',

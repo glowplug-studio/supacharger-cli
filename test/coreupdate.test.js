@@ -387,7 +387,9 @@ test('installs missing account adapter starters without overwriting developer cu
   const adapters = [
     'details-page.tsx',
     'navigation.ts',
+    'notifications.ts',
     'presentation.ts',
+    'privacy.ts',
     'profile-extension.ts',
     'profile-fields.tsx',
     'security-page.tsx',
