@@ -191,6 +191,10 @@ async function inspect(rootDir = process.cwd()) {
     await readIfPresent(path.join(rootDir, 'src', 'supacharger.config.ts')),
     await readIfPresent(path.join(rootDir, 'supacharger.config.ts')),
   ].join('\n');
+  const obsoleteBillingGateProperties = [
+    'ACCOUNT_FORCE_SUBSCRIPTION',
+    'ACCOUNT_ENFORCE_SUBSCRIPTION_PATH',
+  ].filter((property) => new RegExp(`\\b${property}\\b`).test(applicationConfig));
   const protectedProxySource = await readIfPresent(
     path.join(rootDir, 'src', 'lib', 'supabase', 'supacharger', 'proxy.ts')
   );
@@ -267,6 +271,13 @@ async function inspect(rootDir = process.cwd()) {
       ok:
         applicationConfig.includes('PROFILE_IDENTITY') &&
         applicationConfig.includes('POST_SIGN_IN_ONBOARDING'),
+    },
+    {
+      name: 'Deprecated billing-gate configuration removed',
+      ok: obsoleteBillingGateProperties.length === 0,
+      detail: obsoleteBillingGateProperties.length > 0
+        ? `${obsoleteBillingGateProperties.join(', ')}; back up src/supacharger.config.ts, remove these properties manually, then rerun supacharger doctor`
+        : null,
     },
     {
       name: 'Onboarding recovery route',

@@ -99,6 +99,30 @@ test('reports missing hook and claims migration without reading secret values', 
   assert.equal(checks.find((check) => check.name === 'Custom claims migration').ok, false);
 });
 
+test('reports deprecated billing-gate properties without rewriting developer configuration', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'supacharger-doctor-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const configPath = path.join(root, 'src', 'supacharger.config.ts');
+  const source = `export const config = {
+  ACCOUNT_FORCE_SUBSCRIPTION: false,
+  ACCOUNT_ENFORCE_SUBSCRIPTION_PATH: '/account/billing/subscribe?full=1',
+};
+`;
+
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ dependencies: {} }));
+  await fs.writeFile(configPath, source);
+
+  const checks = await inspect(root);
+  const deprecatedCheck = checks.find((check) => check.name === 'Deprecated billing-gate configuration removed');
+
+  assert.equal(deprecatedCheck.ok, false);
+  assert.match(deprecatedCheck.detail, /ACCOUNT_FORCE_SUBSCRIPTION/);
+  assert.match(deprecatedCheck.detail, /ACCOUNT_ENFORCE_SUBSCRIPTION_PATH/);
+  assert.match(deprecatedCheck.detail, /back up src\/supacharger\.config\.ts/);
+  assert.equal(await fs.readFile(configPath, 'utf8'), source);
+});
+
 test('reports a missing managed Bruno package script and assets', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'supacharger-doctor-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
