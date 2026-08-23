@@ -16,7 +16,11 @@ test('recognises the canonical Supabase authentication contract', async (t) => {
   await fs.writeFile(
     path.join(root, 'package.json'),
     JSON.stringify({
-      scripts: { 'check:bruno-rpcs': 'node scripts/check-bruno-rpc-parity.mjs' },
+      scripts: {
+        'check:bruno-rpcs': 'node scripts/check-bruno-rpc-parity.mjs',
+        'test:organisation-contract': 'node --test test/organisation-management-contract.test.mjs',
+        'test:organisation-ui': 'node --test test/organisation-ui-contract.test.mjs',
+      },
       dependencies: { next: '16.3.0', '@supabase/ssr': '0.12.4', '@supabase/supabase-js': '2.112.3' },
     })
   );
@@ -36,7 +40,7 @@ test('recognises the canonical Supabase authentication contract', async (t) => {
   );
   await fs.writeFile(
     path.join(root, 'src', 'supacharger.config.ts'),
-    `AUTH_SESSION ALLOW_ANONYMOUS_USERS PATH_AUTH_GUARD AUTHENTICATION EMAIL_PASSWORD PASSWORDLESS_EMAIL OTP_LENGTH SIGN_UP_EMAIL_VERIFICATION MFA_TOTP PROFILE_IDENTITY ORGANISATIONS AUTHENTICATION_HANDLE
+    `AUTH_SESSION ALLOW_ANONYMOUS_USERS PATH_AUTH_GUARD AUTHENTICATION EMAIL_PASSWORD PASSWORDLESS_EMAIL OTP_LENGTH SIGN_UP_EMAIL_VERIFICATION MFA_TOTP PROFILE_IDENTITY AVATAR HEADER_IMAGE ACCOUNT_SETTINGS LANGUAGE CANCEL_ACCOUNT PRODUCT_PROFILE_PATH ORGANISATIONS AUTHENTICATION_HANDLE CHOOSER_PATH ROUTE_MODE PROFILE_MEDIA ACCOUNT_SUBJECTS PERSONAL ORGANISATION
 POST_SIGN_IN_ONBOARDING: { REQUIRED: true, REDIRECT_PATH: '/account/setup-profile' }
 BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?full=1' }
 `
@@ -44,6 +48,29 @@ BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?ful
   await fs.writeFile(
     path.join(root, 'src', 'app', '(project)', '(verified)', 'layout.tsx'),
     'await requireVerifiedUser();\n'
+  );
+  for (const relativePath of [
+    path.join('src', 'app', '(supacharger)', '(authenticated)', 'account', 'organisation', 'page.tsx'),
+    path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'page.tsx'),
+    path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'team', 'page.tsx'),
+    path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'billing', 'page.tsx'),
+    path.join('src', 'app', '(supacharger)', 'api', 'organisations', 'route.ts'),
+    path.join('src', 'supacharger.adapters', 'organisations', 'profile-extension.ts'),
+    path.join('src', 'supacharger.adapters', 'organisations', 'profile-fields.tsx'),
+  ]) {
+    await fs.mkdir(path.dirname(path.join(root, relativePath)), { recursive: true });
+    await fs.writeFile(path.join(root, relativePath), 'export {};\n');
+  }
+  await fs.mkdir(path.join(root, 'messages'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, 'messages', 'en.json'),
+    JSON.stringify({
+      AccountSettings: { title: 'Settings' },
+      AccountPreferences: { title: 'Preferences' },
+      AccountSecurity: { title: 'Security' },
+      Billing: { title: 'Billing' },
+      Organisations: { title: 'Organisations' },
+    }),
   );
   await fs.writeFile(
     path.join(root, 'src', 'app', '(project)', '(verified)', 'account', 'setup-profile', 'page.tsx'),
@@ -72,9 +99,14 @@ BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?ful
   await fs.writeFile(
     path.join(root, '.supacharger', 'managed-files.json'),
     JSON.stringify({
-      managedPaths: ['docs/bruno/supacharger-rpc', 'scripts/check-bruno-rpc-parity.mjs'],
+      managedPaths: [
+        'docs/bruno/supacharger-rpc',
+        'scripts/check-bruno-rpc-parity.mjs',
+        'test/organisation-management-contract.test.mjs',
+        'test/organisation-ui-contract.test.mjs',
+      ],
       developerOwnedPaths: [],
-      postUpdateChecks: ['check:bruno-rpcs'],
+      postUpdateChecks: ['check:bruno-rpcs', 'test:organisation-contract', 'test:organisation-ui'],
     })
   );
   await fs.mkdir(path.join(root, 'docs', 'bruno', 'supacharger-rpc'), { recursive: true });
@@ -140,6 +172,25 @@ test('reports a missing managed Bruno package script and assets', async (t) => {
   const checks = await inspect(root);
   assert.equal(checks.find((check) => check.name === 'Required post-update package scripts').ok, false);
   assert.equal(checks.find((check) => check.name === 'Managed Bruno RPC parity assets').ok, false);
+});
+
+test('reports a forward migration alias whose adapted migration is missing', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'supacharger-doctor-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, '.supacharger'), { recursive: true });
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ dependencies: {} }));
+  await fs.writeFile(
+    path.join(root, '.supacharger', 'migration-aliases.json'),
+    JSON.stringify({
+      'supabase/migrations/20260824100000_add_organisation_management.sql':
+        'supabase/migrations/20260824100001_add_organisation_management.sql',
+    }),
+  );
+
+  const checks = await inspect(root);
+  const aliases = checks.find((check) => check.name === 'Forward migration aliases');
+  assert.equal(aliases.ok, false);
+  assert.match(aliases.detail, /missing/);
 });
 
 test('reports enabled recovery routes that are missing or inherit the full-app guard', async (t) => {

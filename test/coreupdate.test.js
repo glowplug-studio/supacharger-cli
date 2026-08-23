@@ -13,6 +13,8 @@ const {
   detectPackageManager,
   installMissingDeveloperStarters,
   matchingPreservedPath,
+  mergeEnglishCatalogue,
+  migrateAccountAlignmentConfig,
   migrateAuthProviderConfig,
   migrateLegacyAuthSessionConfig,
   migrateLegacyConfig,
@@ -305,6 +307,52 @@ test('adds root document defaults without replacing application branding', async
   assert.deepEqual(await migrateRootDocumentConfig(root, { backup: false }), []);
 });
 
+test('adds disabled-safe account and organisation options without replacing application values', async (t) => {
+  const root = await temporaryDirectory(t);
+  const configPath = path.join(root, 'src', 'supacharger.config.ts');
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(
+    configPath,
+    `export const SC_CONFIG = {
+  PROFILE_IDENTITY: {
+    USERNAME: 'required',
+  },
+  POST_SIGN_IN_ONBOARDING: {
+    REQUIRED: true,
+    REDIRECT_PATH: '/custom-profile',
+  },
+  BILLING_ACCESS: {
+    REQUIRED: true,
+    REDIRECT_PATH: '/custom-billing',
+  },
+  BILLING: {
+    AUTOMATIC_TAX: true,
+  },
+};
+`,
+    'utf8'
+  );
+
+  const planned = await migrateAccountAlignmentConfig(root, { plan: true });
+  assert.deepEqual(planned, [
+    'PROFILE_IDENTITY.AVATAR',
+    'PROFILE_IDENTITY.HEADER_IMAGE',
+    'ACCOUNT_SETTINGS',
+    'ORGANISATIONS',
+    'BILLING.ACCOUNT_SUBJECTS',
+  ]);
+  await migrateAccountAlignmentConfig(root, { backup: false });
+
+  const migrated = await fs.readFile(configPath, 'utf8');
+  assert.match(migrated, /USERNAME: 'required'/);
+  assert.match(migrated, /REDIRECT_PATH: '\/custom-profile'/);
+  assert.match(migrated, /AUTOMATIC_TAX: true/);
+  assert.match(migrated, /ACCOUNT_SETTINGS:[\s\S]*LANGUAGE: true/);
+  assert.match(migrated, /ORGANISATIONS:[\s\S]*ENABLED: false/);
+  assert.match(migrated, /ACCOUNT_SUBJECTS:[\s\S]*ORGANISATION: false/);
+  assert.deepEqual(await migrateAccountAlignmentConfig(root, { backup: false }), []);
+});
+
 test('preserves the complete developer-owned messages directory', async (t) => {
   const root = await temporaryDirectory(t);
   const update = await temporaryDirectory(t);
@@ -340,6 +388,35 @@ test('installs starter messages only when the developer-owned directory is absen
     await fs.readFile(path.join(root, 'messages', 'en.json'), 'utf8'),
     '{"starter":true}\n'
   );
+});
+
+test('merges missing canonical English messages and preserves application wording and secondary catalogues', async (t) => {
+  const root = await temporaryDirectory(t);
+  const update = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, 'messages'), { recursive: true });
+  await fs.mkdir(path.join(update, 'messages'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, 'messages', 'en.json'),
+    `${JSON.stringify({ Account: { title: 'My account', missing: '' }, Product: { custom: 'Keep me' } }, null, 2)}\n`,
+  );
+  await fs.writeFile(path.join(root, 'messages', 'fr.json'), '{"Account":{"title":"Mon compte"}}\n');
+  await fs.writeFile(
+    path.join(update, 'messages', 'en.json'),
+    `${JSON.stringify({ Account: { title: 'Account', missing: 'Required copy' }, Organisations: { title: 'Organisations' } }, null, 2)}\n`,
+  );
+
+  assert.deepEqual(await mergeEnglishCatalogue(root, update, { plan: true }), [
+    'Account.missing',
+    'Organisations',
+  ]);
+  await mergeEnglishCatalogue(root, update, { backup: false });
+
+  const english = JSON.parse(await fs.readFile(path.join(root, 'messages', 'en.json'), 'utf8'));
+  assert.equal(english.Account.title, 'My account');
+  assert.equal(english.Account.missing, 'Required copy');
+  assert.equal(english.Product.custom, 'Keep me');
+  assert.equal(english.Organisations.title, 'Organisations');
+  assert.equal(await fs.readFile(path.join(root, 'messages', 'fr.json'), 'utf8'), '{"Account":{"title":"Mon compte"}}\n');
 });
 
 test('matches nested files beneath a preserved developer-owned directory', () => {
@@ -421,6 +498,23 @@ test('installs missing billing adapter starters without overwriting developer cu
 
   assert.deepEqual(await installMissingDeveloperStarters(update, root), [adapters[0], adapters[1]]);
   assert.equal(await fs.readFile(path.join(root, adapters[2]), 'utf8'), 'developer organisation billing\n');
+});
+
+test('installs missing organisation profile adapter starters without overwriting developer customisations', async (t) => {
+  const root = await temporaryDirectory(t);
+  const update = await temporaryDirectory(t);
+  const adapterDirectory = path.join('src', 'supacharger.adapters', 'organisations');
+  const adapters = ['profile-extension.ts', 'profile-fields.tsx'].map((file) => path.join(adapterDirectory, file));
+
+  for (const relativePath of adapters) {
+    await fs.mkdir(path.dirname(path.join(update, relativePath)), { recursive: true });
+    await fs.writeFile(path.join(update, relativePath), `starter ${relativePath}\n`);
+  }
+  await fs.mkdir(path.dirname(path.join(root, adapters[0])), { recursive: true });
+  await fs.writeFile(path.join(root, adapters[0]), 'developer extension\n');
+
+  assert.deepEqual(await installMissingDeveloperStarters(update, root), [adapters[1]]);
+  assert.equal(await fs.readFile(path.join(root, adapters[0]), 'utf8'), 'developer extension\n');
 });
 
 test('moves unchanged legacy auth routes out of the developer route group and rejects modified routes', async (t) => {
@@ -639,6 +733,33 @@ test('preserves a colliding project migration instead of overwriting it', async 
 
   await assert.rejects(runPostUpdateSteps(root, assessment), /Forward-only migration collision/);
   assert.equal(await fs.readFile(path.join(root, migration), 'utf8'), 'project history;\n');
+});
+
+test('accepts an explicit developer-owned alias for an adapted forward migration', async (t) => {
+  const root = await temporaryDirectory(t);
+  const update = await temporaryDirectory(t);
+  const canonical = path.join('supabase', 'migrations', '20260824100000_add_organisation_management.sql');
+  const adapted = path.join('supabase', 'migrations', '20260824100001_add_organisation_management.sql');
+  const packageJson = { name: 'consumer', dependencies: {} };
+
+  await fs.mkdir(path.join(root, '.supacharger'), { recursive: true });
+  await fs.mkdir(path.dirname(path.join(root, adapted)), { recursive: true });
+  await fs.mkdir(path.dirname(path.join(update, canonical)), { recursive: true });
+  await fs.writeFile(path.join(root, 'package.json'), `${JSON.stringify(packageJson)}\n`);
+  await fs.writeFile(path.join(update, 'package.json'), `${JSON.stringify(packageJson)}\n`);
+  await fs.writeFile(path.join(root, adapted), 'adapted consumer contract;\n');
+  await fs.writeFile(path.join(update, canonical), 'canonical core contract;\n');
+  await fs.writeFile(
+    path.join(root, '.supacharger', 'migration-aliases.json'),
+    `${JSON.stringify({ [canonical]: adapted }, null, 2)}\n`,
+  );
+
+  const assessment = await assessPostUpdateWork(root, update);
+  assert.deepEqual(assessment.changedMigrations, []);
+  assert.deepEqual(assessment.satisfiedMigrationAliases, [{ canonical, replacement: adapted }]);
+  assert.equal(await runPostUpdateSteps(root, assessment), true);
+  await assert.rejects(fs.access(path.join(root, canonical)));
+  assert.equal(await fs.readFile(path.join(root, adapted), 'utf8'), 'adapted consumer contract;\n');
 });
 
 test('limits managed files to the versioned manifest and excludes developer seams', async (t) => {

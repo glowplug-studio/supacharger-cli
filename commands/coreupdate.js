@@ -10,6 +10,7 @@ const CORE_REPOSITORY = 'glowplug-studio/supacharger';
 const CORE_SSH_URL = `git@github.com:${CORE_REPOSITORY}.git`;
 const CORE_LOCK_FILE = path.join('.supacharger', 'core-lock.json');
 const MANAGED_FILES_MANIFEST = path.join('.supacharger', 'managed-files.json');
+const MIGRATION_ALIASES_FILE = path.join('.supacharger', 'migration-aliases.json');
 const AUTOMATIC_MERGE_PATHS = new Set(['package.json', 'package-lock.json']);
 const DEFAULT_MIGRATION_PATHS = [path.join('supabase', 'migrations')];
 const PROJECT_STYLES_FILE = path.join('src', 'styles', 'project.css');
@@ -27,11 +28,14 @@ const ACCOUNT_ADAPTER_FILES = [
 ].map((file) => path.join('src', 'supacharger.adapters', 'account', file));
 const BILLING_ADAPTER_FILES = ['acquisition.tsx', 'database.ts', 'organisation.ts']
   .map((file) => path.join('src', 'supacharger.adapters', 'billing', file));
+const ORGANISATION_ADAPTER_FILES = ['profile-extension.ts', 'profile-fields.tsx']
+  .map((file) => path.join('src', 'supacharger.adapters', 'organisations', file));
 const DEVELOPER_STARTERS = [
   AUTH_STYLES_FILE,
   AUTH_SIDECAR_FILE,
   ...ACCOUNT_ADAPTER_FILES,
   ...BILLING_ADAPTER_FILES,
+  ...ORGANISATION_ADAPTER_FILES,
 ];
 const LEGACY_AUTH_ROUTE_FILES = [
   path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'layout.tsx'),
@@ -316,6 +320,188 @@ async function migrateLegacyAuthSessionConfig(rootDir, options = {}) {
   await fs.writeFile(configPath, content.replace(legacyProperty, '').replace(/\n{3,}/g, '\n\n'), 'utf8');
   console.log('\x1b[34mRemoved legacy AUTH_SESSION.VERIFICATION_MODE; Proxy verification is now always getClaims().\x1b[0m');
   return ['AUTH_SESSION.VERIFICATION_MODE'];
+}
+
+function objectBlockBounds(source, objectName) {
+  const match = new RegExp(`\\b${objectName}\\s*:`).exec(source);
+  if (!match) return null;
+  const open = source.indexOf('{', match.index + match[0].length);
+  if (open === -1) return null;
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    if (source[index] === '}') depth -= 1;
+    if (depth === 0) {
+      return {
+        open,
+        close: index,
+        closeLineStart: source.lastIndexOf('\n', index) + 1,
+      };
+    }
+  }
+  return null;
+}
+
+function missingObjectKeys(source, objectName, keys) {
+  const bounds = objectBlockBounds(source, objectName);
+  if (!bounds) return keys;
+  const block = source.slice(bounds.open, bounds.close + 1);
+  return keys.filter((key) => !new RegExp(`\\b${key}\\s*:`).test(block));
+}
+
+function insertObjectEntries(source, objectName, entries) {
+  const bounds = objectBlockBounds(source, objectName);
+  if (!bounds) throw new Error(`Could not find ${objectName} in src/supacharger.config.ts.`);
+  const missing = entries.filter(([key]) => missingObjectKeys(source, objectName, [key]).length > 0);
+  if (missing.length === 0) return source;
+  const closingIndent = source.slice(bounds.closeLineStart, bounds.close);
+  const propertyIndent = `${closingIndent}  `;
+  const addition = missing
+    .map(([, value]) => `${propertyIndent}${value.replaceAll('\n', `\n${propertyIndent}`)}`)
+    .join('\n');
+  return `${source.slice(0, bounds.closeLineStart)}${addition}\n${source.slice(bounds.closeLineStart)}`;
+}
+
+function insertTopLevelBlock(source, anchorName, block) {
+  const anchor = new RegExp(`^([ \\t]*)${anchorName}\\s*:`, 'm').exec(source);
+  if (!anchor) {
+    throw new Error(`Could not find ${anchorName} in src/supacharger.config.ts; add the new account alignment options manually.`);
+  }
+  return `${source.slice(0, anchor.index)}${anchor[1]}${block.replaceAll('\n', `\n${anchor[1]}`)}\n\n${source.slice(anchor.index)}`;
+}
+
+async function assessAccountAlignmentConfig(rootDir) {
+  const configPath = path.join(rootDir, 'src', 'supacharger.config.ts');
+  let source;
+  try {
+    source = await fs.readFile(configPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+
+  const missing = [];
+  for (const key of missingObjectKeys(source, 'PROFILE_IDENTITY', ['AVATAR', 'HEADER_IMAGE'])) {
+    missing.push(`PROFILE_IDENTITY.${key}`);
+  }
+  if (!objectBlockBounds(source, 'ACCOUNT_SETTINGS')) {
+    missing.push('ACCOUNT_SETTINGS');
+  } else {
+    for (const key of missingObjectKeys(source, 'ACCOUNT_SETTINGS', ['LANGUAGE', 'CANCEL_ACCOUNT', 'PRODUCT_PROFILE_PATH'])) {
+      missing.push(`ACCOUNT_SETTINGS.${key}`);
+    }
+  }
+  if (!objectBlockBounds(source, 'ORGANISATIONS')) {
+    missing.push('ORGANISATIONS');
+  } else {
+    for (const key of missingObjectKeys(source, 'ORGANISATIONS', ['ENABLED', 'AUTHENTICATION_HANDLE', 'CHOOSER_PATH', 'ROUTE_MODE', 'PROFILE_MEDIA'])) {
+      missing.push(`ORGANISATIONS.${key}`);
+    }
+  }
+  if (missingObjectKeys(source, 'BILLING', ['ACCOUNT_SUBJECTS']).length > 0) {
+    missing.push('BILLING.ACCOUNT_SUBJECTS');
+  }
+  return missing;
+}
+
+async function migrateAccountAlignmentConfig(rootDir, options = {}) {
+  const missing = await assessAccountAlignmentConfig(rootDir);
+  if (missing.length === 0 || options.plan === true) return missing;
+  if (options.backup !== false) {
+    await backupConflicts(rootDir, rootDir, ['src/supacharger.config.ts']);
+  }
+
+  const configPath = path.join(rootDir, 'src', 'supacharger.config.ts');
+  let source = await fs.readFile(configPath, 'utf8');
+  source = insertObjectEntries(source, 'PROFILE_IDENTITY', [
+    ['AVATAR', "AVATAR: 'optional',"],
+    ['HEADER_IMAGE', "HEADER_IMAGE: 'optional',"],
+  ]);
+  if (!objectBlockBounds(source, 'ACCOUNT_SETTINGS')) {
+    source = insertTopLevelBlock(source, 'POST_SIGN_IN_ONBOARDING', `ACCOUNT_SETTINGS: {
+  LANGUAGE: true,
+  CANCEL_ACCOUNT: 'disabled',
+  PRODUCT_PROFILE_PATH: null,
+},`);
+  } else {
+    source = insertObjectEntries(source, 'ACCOUNT_SETTINGS', [
+      ['LANGUAGE', 'LANGUAGE: true,'],
+      ['CANCEL_ACCOUNT', "CANCEL_ACCOUNT: 'disabled',"],
+      ['PRODUCT_PROFILE_PATH', 'PRODUCT_PROFILE_PATH: null,'],
+    ]);
+  }
+  if (!objectBlockBounds(source, 'ORGANISATIONS')) {
+    source = insertTopLevelBlock(source, 'BILLING_ACCESS', `ORGANISATIONS: {
+  ENABLED: false,
+  AUTHENTICATION_HANDLE: 'disabled',
+  CHOOSER_PATH: '/account/organisation',
+  ROUTE_MODE: 'root-handle',
+  PROFILE_MEDIA: true,
+},`);
+  } else {
+    source = insertObjectEntries(source, 'ORGANISATIONS', [
+      ['ENABLED', 'ENABLED: false,'],
+      ['AUTHENTICATION_HANDLE', "AUTHENTICATION_HANDLE: 'disabled',"],
+      ['CHOOSER_PATH', "CHOOSER_PATH: '/account/organisation',"],
+      ['ROUTE_MODE', "ROUTE_MODE: 'root-handle',"],
+      ['PROFILE_MEDIA', 'PROFILE_MEDIA: true,'],
+    ]);
+  }
+  source = insertObjectEntries(source, 'BILLING', [
+    ['ACCOUNT_SUBJECTS', `ACCOUNT_SUBJECTS: {
+  PERSONAL: true,
+  ORGANISATION: false,
+},`],
+  ]);
+  await fs.writeFile(configPath, source, 'utf8');
+  console.log(`\x1b[34mAdded disabled-safe account alignment configuration defaults: ${missing.join(', ')}.\x1b[0m`);
+  return missing;
+}
+
+function mergeMissingCatalogueValues(current, incoming, prefix = '') {
+  const merged = { ...current };
+  const added = [];
+  for (const [key, value] of Object.entries(incoming)) {
+    const propertyPath = prefix ? `${prefix}.${key}` : key;
+    if (!(key in merged) || (merged[key] === '' && typeof value === 'string' && value.trim() !== '')) {
+      merged[key] = value;
+      added.push(propertyPath);
+      continue;
+    }
+    const currentIsObject = merged[key] && typeof merged[key] === 'object' && !Array.isArray(merged[key]);
+    const incomingIsObject = value && typeof value === 'object' && !Array.isArray(value);
+    if (currentIsObject && incomingIsObject) {
+      const nested = mergeMissingCatalogueValues(merged[key], value, propertyPath);
+      merged[key] = nested.merged;
+      added.push(...nested.added);
+    }
+  }
+  return { merged, added };
+}
+
+async function mergeEnglishCatalogue(rootDir, incomingRoot, options = {}) {
+  const relativePath = path.join('messages', 'en.json');
+  let incoming;
+  try {
+    incoming = await readJson(path.join(incomingRoot, relativePath));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  let current;
+  try {
+    current = await readJson(path.join(rootDir, relativePath));
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+    current = {};
+  }
+  const result = mergeMissingCatalogueValues(current, incoming);
+  if (result.added.length === 0 || options.plan === true) return result.added;
+  if (options.backup !== false) await backupConflicts(rootDir, rootDir, [relativePath]);
+  await fs.mkdir(path.dirname(path.join(rootDir, relativePath)), { recursive: true });
+  await fs.writeFile(path.join(rootDir, relativePath), `${JSON.stringify(result.merged, null, 2)}\n`, 'utf8');
+  console.log(`\x1b[34mAdded ${result.added.length} missing canonical English message keys without changing existing application copy.\x1b[0m`);
+  return result.added;
 }
 
 async function assessRootDocumentConfig(rootDir) {
@@ -673,17 +859,37 @@ async function migrationHashes(rootDir, migrationPaths = DEFAULT_MIGRATION_PATHS
   );
 }
 
+async function readMigrationAliases(rootDir) {
+  try {
+    const aliases = await readJson(path.join(rootDir, MIGRATION_ALIASES_FILE));
+    if (!aliases || typeof aliases !== 'object' || Array.isArray(aliases)) {
+      throw new Error(`${MIGRATION_ALIASES_FILE} must contain a JSON object.`);
+    }
+    return new Map(Object.entries(aliases).map(([canonical, replacement]) => {
+      if (typeof replacement !== 'string' || !replacement.endsWith('.sql')) {
+        throw new Error(`Invalid migration alias for ${canonical}.`);
+      }
+      return [path.normalize(canonical), path.normalize(replacement)];
+    }));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return new Map();
+    throw error;
+  }
+}
+
 async function assessPostUpdateWork(rootDir, updateDir, options = {}) {
-  const [currentPackage, incomingPackage, incomingFiles] = await Promise.all([
+  const [currentPackage, incomingPackage, incomingFiles, migrationAliases] = await Promise.all([
     readJson(path.join(rootDir, 'package.json')),
     readJson(path.join(updateDir, 'package.json')),
     walkFiles(updateDir),
+    readMigrationAliases(rootDir),
   ]);
   const migrationPaths = options.forwardOnlyMigrationPaths ?? DEFAULT_MIGRATION_PATHS;
   const incomingMigrations = incomingFiles.filter(
     (file) => pathMatchesManifest(file, migrationPaths) && file.endsWith('.sql')
   );
   const changedMigrations = [];
+  const satisfiedMigrationAliases = [];
 
   for (const migration of incomingMigrations) {
     const incomingHash = await hashFile(path.join(updateDir, migration));
@@ -692,6 +898,17 @@ async function assessPostUpdateWork(rootDir, updateDir, options = {}) {
         throw new Error(`Published migration changed after installation: ${migration}`);
       }
       continue;
+    }
+    const replacement = migrationAliases.get(path.normalize(migration));
+    if (replacement) {
+      try {
+        await fs.access(path.join(rootDir, replacement));
+        satisfiedMigrationAliases.push({ canonical: migration, replacement });
+        continue;
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+        throw new Error(`Migration alias target is missing: ${replacement} (for ${migration}).`);
+      }
     }
     try {
       const currentHash = await hashFile(path.join(rootDir, migration));
@@ -712,6 +929,7 @@ async function assessPostUpdateWork(rootDir, updateDir, options = {}) {
     incomingRoot: updateDir,
     incomingFiles,
     changedMigrations,
+    satisfiedMigrationAliases,
     requiredScripts,
     missingRequiredScripts,
   };
@@ -1030,7 +1248,9 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     baselineFiles,
     latestFiles,
     assessment,
+    accountAlignmentConfigMigration,
     authProviderConfigMigration,
+    englishCatalogueAdditions,
     legacyAuthSessionConfigMigration,
     rootDocumentConfigMigration,
   ] = await Promise.all([
@@ -1041,7 +1261,9 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
       forwardOnlyMigrationPaths: latestManifest?.forwardOnlyMigrationPaths,
       postUpdateChecks: latestManifest?.postUpdateChecks,
     }),
+    migrateAccountAlignmentConfig(rootDir, { plan: true }),
     migrateAuthProviderConfig(rootDir, { plan: true }),
+    mergeEnglishCatalogue(rootDir, latestDir, { plan: true }),
     migrateLegacyAuthSessionConfig(rootDir, { plan: true }),
     migrateRootDocumentConfig(rootDir, { plan: true }),
   ]);
@@ -1059,8 +1281,10 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
   );
   return {
     assessment,
+    accountAlignmentConfigMigration,
     authProviderConfigMigration,
     baselineFiles,
+    englishCatalogueAdditions,
     latestFiles,
     latestManifest,
     legacyAuthSessionConfigMigration,
@@ -1091,14 +1315,21 @@ async function printPlan(rootDir, installState) {
     plan.assessment.missingRequiredScripts.forEach((script) => console.log(`  SCRIPT ${script}`));
     console.log(`Changed migrations: ${plan.assessment.changedMigrations.length}`);
     plan.assessment.changedMigrations.forEach(({ path: migration }) => console.log(`  MIGRATION ${migration}`));
+    console.log(`Satisfied migration aliases: ${plan.assessment.satisfiedMigrationAliases.length}`);
+    plan.assessment.satisfiedMigrationAliases.forEach(({ canonical, replacement }) =>
+      console.log(`  MIGRATION ALIAS ${canonical} -> ${replacement}`)
+    );
     console.log(`Manual merge-managed changes: ${plan.manualMergeChanges.length}`);
     plan.manualMergeChanges.forEach((file) => console.log(`  MANUAL MERGE ${file}`));
     console.log(
-      `Developer config changes: ${plan.authProviderConfigMigration.length + plan.legacyAuthSessionConfigMigration.length + plan.rootDocumentConfigMigration.length}`
+      `Developer config changes: ${plan.accountAlignmentConfigMigration.length + plan.authProviderConfigMigration.length + plan.legacyAuthSessionConfigMigration.length + plan.rootDocumentConfigMigration.length}`
     );
+    plan.accountAlignmentConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
     plan.authProviderConfigMigration.forEach((provider) => console.log(`  CONFIG AUTH_PROVDERS_ENABLED.${provider}=false`));
     plan.legacyAuthSessionConfigMigration.forEach((key) => console.log(`  CONFIG REMOVE ${key}`));
     plan.rootDocumentConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
+    console.log(`Canonical English message additions: ${plan.englishCatalogueAdditions.length}`);
+    plan.englishCatalogueAdditions.forEach((key) => console.log(`  MESSAGE ${key}`));
     console.log(`Post-update checks: ${(plan.latestManifest?.postUpdateChecks ?? []).join(', ') || 'none'}`);
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -1226,6 +1457,8 @@ Enter Y to continue: \u001b[0m`;
       await migrateLegacyAuthSessionConfig(cwd);
       await migrateAuthProviderConfig(cwd);
       await migrateRootDocumentConfig(cwd);
+      await migrateAccountAlignmentConfig(cwd);
+      await mergeEnglishCatalogue(cwd, updateDir);
       await migrateLegacyPostcssConfig(cwd);
       await personaliseStarterProjectStyles(cwd);
       const postUpdateComplete = await runPostUpdateSteps(cwd, assessment);
@@ -1322,6 +1555,8 @@ Enter Y to continue: \u001b[0m`;
     await migrateLegacyAuthSessionConfig(cwd);
     await migrateAuthProviderConfig(cwd);
     await migrateRootDocumentConfig(cwd);
+    await migrateAccountAlignmentConfig(cwd);
+    await mergeEnglishCatalogue(cwd, updateDir);
     await migrateLegacyPostcssConfig(cwd);
     await personaliseStarterProjectStyles(cwd);
     const postUpdateComplete = await runPostUpdateSteps(cwd, assessment);
@@ -1351,12 +1586,14 @@ coreupdate.testHelpers = {
   changedManualMergePaths,
   matchingPreservedPath,
   migrateAuthProviderConfig,
+  migrateAccountAlignmentConfig,
   migrateLegacyAuthSessionConfig,
   migrateLegacyConfig,
   migrateLegacyPostcssConfig,
   migrateLegacyProjectStyles,
   migrateLegacyAuthRoutes,
   migrateRootDocumentConfig,
+  mergeEnglishCatalogue,
   installMissingDeveloperStarters,
   moveFiles,
   mergeDependencyContract,
@@ -1367,6 +1604,7 @@ coreupdate.testHelpers = {
   removeObsoleteManagedFiles,
   personaliseStarterProjectStyles,
   readInstallState,
+  readMigrationAliases,
   runPostUpdateSteps,
   runPostUpdateChecks,
   requiredPackageScripts,

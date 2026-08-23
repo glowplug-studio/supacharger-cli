@@ -6,6 +6,10 @@ Generated or upgraded PostgreSQL functions and PostgREST RPCs must not prefix ex
 
 Keep exact managed contract tests limited to reusable Supacharger behaviour. Preserve `test/project-billing-schema-contract.test.mjs` as a developer-owned consumer seam, and preserve consumer package scripts that add the project test alongside the shared managed test.
 
+Preserve locale configuration and every secondary-language catalogue during updates. The only catalogue merge permitted by default is adding a missing canonical English key or filling an empty English source value from Core; never replace existing non-empty product wording or invent secondary translations.
+
+Treat `.supacharger/migration-aliases.json` as a developer-owned audit record for a reviewed, immutable consumer adaptation of a canonical forward migration. Validate every target, report mappings in the update plan and doctor output, and never infer equivalence from filenames alone.
+
 <!-- BEGIN:shared-bruno-rpc-guidance -->
 
 ## Bruno RPC maintenance

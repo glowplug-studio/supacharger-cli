@@ -1,6 +1,26 @@
 const fs = require('fs/promises');
 const path = require('path');
 
+const LEGACY_ROUTE_PATHS = [
+  '/organisation',
+  '/auth/login',
+  '/auth/create',
+  '/auth/login-magic',
+  '/auth/reset-password',
+  '/auth/reset-password/new',
+];
+const ORGANISATION_ROUTE_FILES = [
+  path.join('src', 'app', '(supacharger)', '(authenticated)', 'account', 'organisation', 'page.tsx'),
+  path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'page.tsx'),
+  path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'team', 'page.tsx'),
+  path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'billing', 'page.tsx'),
+  path.join('src', 'app', '(supacharger)', 'api', 'organisations', 'route.ts'),
+];
+const ORGANISATION_ADAPTER_FILES = [
+  path.join('src', 'supacharger.adapters', 'organisations', 'profile-extension.ts'),
+  path.join('src', 'supacharger.adapters', 'organisations', 'profile-fields.tsx'),
+];
+
 async function exists(filePath) {
   try {
     await fs.access(filePath);
@@ -24,6 +44,12 @@ function parseJson(source) {
   } catch {
     return null;
   }
+}
+
+function hasNonEmptyLeaf(value) {
+  if (typeof value === 'string') return value.trim() !== '';
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.values(value).some(hasNonEmptyLeaf);
 }
 
 function readObjectBlock(source, objectName) {
@@ -179,6 +205,25 @@ async function findRpcArgumentMigration(rootDir) {
   return null;
 }
 
+async function inspectMigrationAliases(rootDir) {
+  const relativePath = path.join('.supacharger', 'migration-aliases.json');
+  const source = await readIfPresent(path.join(rootDir, relativePath));
+  if (!source) return { ok: true, detail: 'none' };
+  const aliases = parseJson(source);
+  if (!aliases || typeof aliases !== 'object' || Array.isArray(aliases)) {
+    return { ok: false, detail: `${relativePath} is not a JSON object` };
+  }
+  const invalid = [];
+  for (const [canonical, replacement] of Object.entries(aliases)) {
+    if (!canonical.endsWith('.sql') || typeof replacement !== 'string' || !replacement.endsWith('.sql')) {
+      invalid.push(canonical);
+      continue;
+    }
+    if (!await exists(path.join(rootDir, replacement))) invalid.push(`${canonical} -> ${replacement} (missing)`);
+  }
+  return { ok: invalid.length === 0, detail: invalid.join(', ') || `${Object.keys(aliases).length} declared` };
+}
+
 async function inspect(rootDir = process.cwd()) {
   const packageJson = JSON.parse(await fs.readFile(path.join(rootDir, 'package.json'), 'utf8'));
   const dependencies = { ...packageJson.dependencies, ...packageJson.devDependencies };
@@ -210,6 +255,7 @@ async function inspect(rootDir = process.cwd()) {
   const claimsMigration = await findClaimsMigration(rootDir);
   const organisationMigration = await findOrganisationMigration(rootDir);
   const rpcArgumentMigration = await findRpcArgumentMigration(rootDir);
+  const migrationAliases = await inspectMigrationAliases(rootDir);
   const managedManifestSource = await readIfPresent(path.join(rootDir, '.supacharger', 'managed-files.json'));
   const managedManifest = parseJson(managedManifestSource);
   const postUpdateChecks = managedManifest?.postUpdateChecks ?? [];
@@ -217,6 +263,17 @@ async function inspect(rootDir = process.cwd()) {
   const brunoCheckerPath = path.join('scripts', 'check-bruno-rpc-parity.mjs');
   const brunoCollectionPath = path.join('docs', 'bruno', 'supacharger-rpc');
   const managedPaths = managedManifest?.managedPaths ?? [];
+  const englishCatalogue = parseJson(await readIfPresent(path.join(rootDir, 'messages', 'en.json')));
+  const requiredEnglishNamespaces = ['AccountSettings', 'AccountPreferences', 'AccountSecurity', 'Billing', 'Organisations'];
+  const legacyRoutes = (await Promise.all(
+    LEGACY_ROUTE_PATHS.map(async (publicPath) => [publicPath, await findRoutePage(rootDir, publicPath)])
+  )).filter(([, page]) => Boolean(page));
+  const missingOrganisationRoutes = (await Promise.all(
+    ORGANISATION_ROUTE_FILES.map(async (file) => [file, await exists(path.join(rootDir, file))])
+  )).filter(([, present]) => !present).map(([file]) => file);
+  const missingOrganisationAdapters = (await Promise.all(
+    ORGANISATION_ADAPTER_FILES.map(async (file) => [file, await exists(path.join(rootDir, file))])
+  )).filter(([, present]) => !present).map(([file]) => file);
 
   const onboardingPolicy = readRecoveryPolicy(applicationConfig, 'POST_SIGN_IN_ONBOARDING');
   const billingPolicy = readRecoveryPolicy(applicationConfig, 'BILLING_ACCESS');
@@ -270,7 +327,17 @@ async function inspect(rootDir = process.cwd()) {
       name: 'Profile identity and onboarding configuration',
       ok:
         applicationConfig.includes('PROFILE_IDENTITY') &&
+        applicationConfig.includes('AVATAR') &&
+        applicationConfig.includes('HEADER_IMAGE') &&
         applicationConfig.includes('POST_SIGN_IN_ONBOARDING'),
+    },
+    {
+      name: 'Account settings configuration',
+      ok:
+        applicationConfig.includes('ACCOUNT_SETTINGS') &&
+        applicationConfig.includes('LANGUAGE') &&
+        applicationConfig.includes('CANCEL_ACCOUNT') &&
+        applicationConfig.includes('PRODUCT_PROFILE_PATH'),
     },
     {
       name: 'Deprecated billing-gate configuration removed',
@@ -301,7 +368,43 @@ async function inspect(rootDir = process.cwd()) {
     },
     {
       name: 'Organisation capability configuration',
-      ok: applicationConfig.includes('ORGANISATIONS') && applicationConfig.includes('AUTHENTICATION_HANDLE'),
+      ok:
+        applicationConfig.includes('ORGANISATIONS') &&
+        applicationConfig.includes('AUTHENTICATION_HANDLE') &&
+        applicationConfig.includes('CHOOSER_PATH') &&
+        applicationConfig.includes('ROUTE_MODE') &&
+        applicationConfig.includes('PROFILE_MEDIA'),
+    },
+    {
+      name: 'Billing account-subject configuration',
+      ok:
+        applicationConfig.includes('ACCOUNT_SUBJECTS') &&
+        applicationConfig.includes('PERSONAL') &&
+        applicationConfig.includes('ORGANISATION'),
+    },
+    {
+      name: 'Canonical organisation routes',
+      ok: missingOrganisationRoutes.length === 0,
+      detail: missingOrganisationRoutes.join(', ') || null,
+    },
+    {
+      name: 'Organisation profile adapters',
+      ok: missingOrganisationAdapters.length === 0,
+      detail: missingOrganisationAdapters.join(', ') || null,
+    },
+    {
+      name: 'Obsolete account and organisation routes removed',
+      ok: legacyRoutes.length === 0,
+      detail: legacyRoutes.map(([publicPath]) => publicPath).join(', ') || null,
+    },
+    {
+      name: 'Canonical English account catalogue',
+      ok:
+        Boolean(englishCatalogue) &&
+        requiredEnglishNamespaces.every((namespace) => hasNonEmptyLeaf(englishCatalogue[namespace])),
+      detail: requiredEnglishNamespaces
+        .filter((namespace) => !hasNonEmptyLeaf(englishCatalogue?.[namespace]))
+        .join(', ') || null,
     },
     {
       name: 'Supabase custom access-token hook',
@@ -312,6 +415,7 @@ async function inspect(rootDir = process.cwd()) {
     { name: 'Custom claims migration', ok: Boolean(claimsMigration), detail: claimsMigration },
     { name: 'Organisation foundation migration', ok: Boolean(organisationMigration), detail: organisationMigration },
     { name: 'Unprefixed exposed-RPC migration', ok: Boolean(rpcArgumentMigration), detail: rpcArgumentMigration },
+    { name: 'Forward migration aliases', ok: migrationAliases.ok, detail: migrationAliases.detail },
     {
       name: 'Managed-file ownership manifest',
       ok:
@@ -335,6 +439,14 @@ async function inspect(rootDir = process.cwd()) {
         await exists(path.join(rootDir, brunoCheckerPath)) &&
         await exists(path.join(rootDir, brunoCollectionPath)) &&
         packageJson.scripts?.['check:bruno-rpcs'] === 'node scripts/check-bruno-rpc-parity.mjs',
+    },
+    {
+      name: 'Managed organisation contract checks',
+      ok:
+        managedPaths.includes(path.join('test', 'organisation-management-contract.test.mjs')) &&
+        managedPaths.includes(path.join('test', 'organisation-ui-contract.test.mjs')) &&
+        postUpdateChecks.includes('test:organisation-contract') &&
+        postUpdateChecks.includes('test:organisation-ui'),
     },
     {
       name: 'Public Supabase environment contract',
