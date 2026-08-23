@@ -15,7 +15,14 @@ const DEFAULT_MIGRATION_PATHS = [path.join('supabase', 'migrations')];
 const PROJECT_STYLES_FILE = path.join('src', 'styles', 'project.css');
 const AUTH_STYLES_FILE = path.join('src', 'styles', 'supacharger-auth.css');
 const AUTH_SIDECAR_FILE = path.join('src', 'supacharger.adapters', 'auth', 'auth-sidecar.tsx');
-const AUTH_DEVELOPER_STARTERS = [AUTH_STYLES_FILE, AUTH_SIDECAR_FILE];
+const ACCOUNT_ADAPTER_FILES = [
+  'details-page.tsx',
+  'navigation.ts',
+  'presentation.ts',
+  'profile-extension.ts',
+  'profile-fields.tsx',
+].map((file) => path.join('src', 'supacharger.adapters', 'account', file));
+const DEVELOPER_STARTERS = [AUTH_STYLES_FILE, AUTH_SIDECAR_FILE, ...ACCOUNT_ADAPTER_FILES];
 const LEGACY_AUTH_ROUTE_FILES = [
   path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'layout.tsx'),
   path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'login', 'page.tsx'),
@@ -945,7 +952,7 @@ async function moveFiles(updateDir, rootDir, preservedPaths = [], managedPaths =
   }
 }
 
-async function installMissingDeveloperStarters(updateDir, rootDir, relativePaths = AUTH_DEVELOPER_STARTERS) {
+async function installMissingDeveloperStarters(updateDir, rootDir, relativePaths = DEVELOPER_STARTERS) {
   const installed = [];
   for (const relPath of relativePaths) {
     const source = path.join(updateDir, relPath);
