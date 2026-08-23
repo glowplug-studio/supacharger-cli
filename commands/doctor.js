@@ -18,6 +18,101 @@ async function readIfPresent(filePath) {
   }
 }
 
+function readObjectBlock(source, objectName) {
+  const match = new RegExp(`\\b${objectName}\\s*:`).exec(source);
+  if (!match) return '';
+  const openingBrace = source.indexOf('{', match.index + match[0].length);
+  if (openingBrace === -1) return '';
+
+  let depth = 0;
+  for (let index = openingBrace; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    if (source[index] === '}') depth -= 1;
+    if (depth === 0) return source.slice(openingBrace, index + 1);
+  }
+  return '';
+}
+
+function readRecoveryPolicy(source, objectName) {
+  const block = readObjectBlock(source, objectName);
+  const required = /\bREQUIRED\s*:\s*true\b/.test(block)
+    ? true
+    : /\bREQUIRED\s*:\s*false\b/.test(block)
+      ? false
+      : null;
+  const redirectPath = block.match(/\bREDIRECT_PATH\s*:\s*['"]([^'"]+)['"]/)?.[1] ?? null;
+  return { required, redirectPath };
+}
+
+async function walkRoutePages(directory) {
+  let entries;
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const pages = [];
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) pages.push(...await walkRoutePages(entryPath));
+    else if (/^page\.(?:js|jsx|ts|tsx)$/.test(entry.name)) pages.push(entryPath);
+  }
+  return pages;
+}
+
+async function findRoutePage(rootDir, publicPath) {
+  if (!publicPath?.startsWith('/')) return null;
+  const appDirectory = path.join(rootDir, 'src', 'app');
+  const expectedSegments = publicPath.split('?')[0].split('/').filter(Boolean);
+  const pages = await walkRoutePages(appDirectory);
+
+  return pages.find((pagePath) => {
+    const routeSegments = path.relative(appDirectory, path.dirname(pagePath))
+      .split(path.sep)
+      .filter((segment) => segment && !(segment.startsWith('(') && segment.endsWith(')')));
+    return routeSegments.length === expectedSegments.length &&
+      routeSegments.every((segment, index) => segment === expectedSegments[index]);
+  }) ?? null;
+}
+
+async function readAncestorLayouts(rootDir, pagePath) {
+  const appDirectory = path.join(rootDir, 'src', 'app');
+  const sources = [];
+  let directory = path.dirname(pagePath);
+
+  while (directory.startsWith(appDirectory)) {
+    for (const extension of ['tsx', 'ts', 'jsx', 'js']) {
+      const source = await readIfPresent(path.join(directory, `layout.${extension}`));
+      if (source) sources.push(source);
+    }
+    if (directory === appDirectory) break;
+    directory = path.dirname(directory);
+  }
+  return sources.join('\n');
+}
+
+async function inspectRecoveryRoute(rootDir, policy, incompatibleHelpers) {
+  if (!policy.redirectPath) {
+    return { exists: false, safe: false, detail: policy.required ? 'configured redirect path missing' : null };
+  }
+
+  const pagePath = await findRoutePage(rootDir, policy.redirectPath);
+  if (!pagePath) {
+    return { exists: false, safe: false, detail: `${policy.redirectPath} is missing` };
+  }
+
+  const layouts = await readAncestorLayouts(rootDir, pagePath);
+  const incompatibleHelper = incompatibleHelpers.find((helper) => layouts.includes(helper));
+  return {
+    exists: true,
+    safe: !incompatibleHelper,
+    detail: incompatibleHelper
+      ? `${policy.redirectPath} inherits ${incompatibleHelper}`
+      : path.relative(rootDir, pagePath),
+  };
+}
+
 async function findClaimsMigration(rootDir) {
   const migrationsDirectory = path.join(rootDir, 'supabase', 'migrations');
   let entries;
@@ -105,6 +200,13 @@ async function inspect(rootDir = process.cwd()) {
   const rpcArgumentMigration = await findRpcArgumentMigration(rootDir);
   const managedManifest = await readIfPresent(path.join(rootDir, '.supacharger', 'managed-files.json'));
 
+  const onboardingPolicy = readRecoveryPolicy(applicationConfig, 'POST_SIGN_IN_ONBOARDING');
+  const billingPolicy = readRecoveryPolicy(applicationConfig, 'BILLING_ACCESS');
+  const [onboardingRoute, billingRoute] = await Promise.all([
+    inspectRecoveryRoute(rootDir, onboardingPolicy, ['requireOnboardedUser', 'requireAppAccess']),
+    inspectRecoveryRoute(rootDir, billingPolicy, ['requireAppAccess']),
+  ]);
+
   return [
     { name: 'Next.js project', ok: Boolean(dependencies.next && nextConfigExists) },
     { name: '@supabase/ssr dependency', ok: typeof dependencies['@supabase/ssr'] === 'string' },
@@ -119,7 +221,11 @@ async function inspect(rootDir = process.cwd()) {
     },
     {
       name: 'Protected server-access boundary',
-      ok: serverAccessSource.includes('requireAppAccess') && serverAccessSource.includes('auth.getClaims()'),
+      ok:
+        serverAccessSource.includes('requireVerifiedUser') &&
+        serverAccessSource.includes('requireOnboardedUser') &&
+        serverAccessSource.includes('requireAppAccess') &&
+        serverAccessSource.includes('auth.getClaims()'),
     },
     {
       name: 'AUTH_SESSION configuration',
@@ -147,6 +253,26 @@ async function inspect(rootDir = process.cwd()) {
       ok:
         applicationConfig.includes('PROFILE_IDENTITY') &&
         applicationConfig.includes('POST_SIGN_IN_ONBOARDING'),
+    },
+    {
+      name: 'Onboarding recovery route',
+      ok: onboardingPolicy.required !== true || onboardingRoute.exists,
+      detail: onboardingPolicy.required === true ? onboardingRoute.detail : 'policy disabled',
+    },
+    {
+      name: 'Onboarding recovery boundary',
+      ok: onboardingPolicy.required !== true || onboardingRoute.safe,
+      detail: onboardingPolicy.required === true ? onboardingRoute.detail : 'policy disabled',
+    },
+    {
+      name: 'Billing recovery route',
+      ok: billingPolicy.required !== true || billingRoute.exists,
+      detail: billingPolicy.required === true ? billingRoute.detail : 'policy disabled',
+    },
+    {
+      name: 'Billing recovery boundary',
+      ok: billingPolicy.required !== true || billingRoute.safe,
+      detail: billingPolicy.required === true ? billingRoute.detail : 'policy disabled',
     },
     {
       name: 'Organisation capability configuration',
@@ -191,6 +317,14 @@ async function doctor(rootDir = process.cwd(), options = {}) {
   return { checks, passed };
 }
 
-doctor.testHelpers = { findClaimsMigration, findOrganisationMigration, findRpcArgumentMigration, inspect };
+doctor.testHelpers = {
+  findClaimsMigration,
+  findOrganisationMigration,
+  findRecoveryRoutePage: findRoutePage,
+  findRpcArgumentMigration,
+  inspect,
+  inspectRecoveryRoute,
+  readRecoveryPolicy,
+};
 
 module.exports = doctor;

@@ -197,6 +197,39 @@ test('updates the protected configuration contract while preserving application 
   assert.equal(await fs.readFile(path.join(root, contract), 'utf8'), 'canonical contract\n');
 });
 
+test('updates managed access helpers without moving developer-owned recovery routes or configuration', async (t) => {
+  const root = await temporaryDirectory(t);
+  const update = await temporaryDirectory(t);
+  const preservedPaths = [
+    path.join('src', 'app', '(project)'),
+    path.join('src', 'supacharger.config.ts'),
+  ];
+  const developerFiles = [
+    path.join('src', 'app', '(project)', '(authenticated)', 'account', 'setup-profile', 'page.tsx'),
+    path.join('src', 'app', '(project)', '(authenticated)', 'account', 'billing', 'subscribe', 'page.tsx'),
+    path.join('src', 'supacharger.config.ts'),
+  ];
+  const managedHelper = path.join('src', 'supacharger', 'auth', 'server-access.ts');
+
+  for (const relativePath of developerFiles) {
+    await fs.mkdir(path.dirname(path.join(root, relativePath)), { recursive: true });
+    await fs.mkdir(path.dirname(path.join(update, relativePath)), { recursive: true });
+    await fs.writeFile(path.join(root, relativePath), `developer ${relativePath}\n`);
+    await fs.writeFile(path.join(update, relativePath), `starter ${relativePath}\n`);
+  }
+  await fs.mkdir(path.dirname(path.join(root, managedHelper)), { recursive: true });
+  await fs.mkdir(path.dirname(path.join(update, managedHelper)), { recursive: true });
+  await fs.writeFile(path.join(root, managedHelper), 'old helper\n');
+  await fs.writeFile(path.join(update, managedHelper), 'three-level helper\n');
+
+  await moveFiles(update, root, preservedPaths);
+
+  for (const relativePath of developerFiles) {
+    assert.equal(await fs.readFile(path.join(root, relativePath), 'utf8'), `developer ${relativePath}\n`);
+  }
+  assert.equal(await fs.readFile(path.join(root, managedHelper), 'utf8'), 'three-level helper\n');
+});
+
 test('adds disabled social OAuth defaults without changing existing provider values', async (t) => {
   const root = await temporaryDirectory(t);
   const configPath = path.join(root, 'src', 'supacharger.config.ts');

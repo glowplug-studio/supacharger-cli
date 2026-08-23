@@ -21,17 +21,38 @@ test('recognises the canonical Supabase authentication contract', async (t) => {
   await fs.writeFile(path.join(root, 'src', 'proxy.ts'), 'export function proxy() {}\n');
   await fs.mkdir(path.join(root, 'src', 'lib', 'supabase', 'supacharger'), { recursive: true });
   await fs.mkdir(path.join(root, 'src', 'supacharger', 'auth'), { recursive: true });
+  await fs.mkdir(path.join(root, 'src', 'app', '(project)', '(verified)', 'account', 'setup-profile'), { recursive: true });
+  await fs.mkdir(path.join(root, 'src', 'app', '(project)', '(onboarded)', 'account', 'billing', 'subscribe'), { recursive: true });
   await fs.writeFile(
     path.join(root, 'src', 'lib', 'supabase', 'supacharger', 'proxy.ts'),
     'export async function updateSession() { return supabase.auth.getClaims(); }\n'
   );
   await fs.writeFile(
     path.join(root, 'src', 'supacharger', 'auth', 'server-access.ts'),
-    'export async function requireAppAccess() { return supabase.auth.getClaims(); }\n'
+    'export async function requireVerifiedUser() { return supabase.auth.getClaims(); }\nexport async function requireOnboardedUser() {}\nexport async function requireAppAccess() {}\n'
   );
   await fs.writeFile(
     path.join(root, 'src', 'supacharger.config.ts'),
-    'AUTH_SESSION ALLOW_ANONYMOUS_USERS PATH_AUTH_GUARD AUTHENTICATION EMAIL_PASSWORD PASSWORDLESS_EMAIL OTP_LENGTH SIGN_UP_EMAIL_VERIFICATION MFA_TOTP PROFILE_IDENTITY POST_SIGN_IN_ONBOARDING ORGANISATIONS AUTHENTICATION_HANDLE\n'
+    `AUTH_SESSION ALLOW_ANONYMOUS_USERS PATH_AUTH_GUARD AUTHENTICATION EMAIL_PASSWORD PASSWORDLESS_EMAIL OTP_LENGTH SIGN_UP_EMAIL_VERIFICATION MFA_TOTP PROFILE_IDENTITY ORGANISATIONS AUTHENTICATION_HANDLE
+POST_SIGN_IN_ONBOARDING: { REQUIRED: true, REDIRECT_PATH: '/account/setup-profile' }
+BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?full=1' }
+`
+  );
+  await fs.writeFile(
+    path.join(root, 'src', 'app', '(project)', '(verified)', 'layout.tsx'),
+    'await requireVerifiedUser();\n'
+  );
+  await fs.writeFile(
+    path.join(root, 'src', 'app', '(project)', '(verified)', 'account', 'setup-profile', 'page.tsx'),
+    'export default function Page() {}\n'
+  );
+  await fs.writeFile(
+    path.join(root, 'src', 'app', '(project)', '(onboarded)', 'layout.tsx'),
+    'await requireOnboardedUser();\n'
+  );
+  await fs.writeFile(
+    path.join(root, 'src', 'app', '(project)', '(onboarded)', 'account', 'billing', 'subscribe', 'page.tsx'),
+    'export default function Page() {}\n'
   );
   await fs.writeFile(
     path.join(root, 'supabase', 'config.toml'),
@@ -66,4 +87,37 @@ test('reports missing hook and claims migration without reading secret values', 
   const checks = await inspect(root);
   assert.equal(checks.find((check) => check.name === 'Supabase custom access-token hook').ok, false);
   assert.equal(checks.find((check) => check.name === 'Custom claims migration').ok, false);
+});
+
+test('reports enabled recovery routes that are missing or inherit the full-app guard', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'supacharger-doctor-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(
+    path.join(root, 'src', 'app', '(project)', '(authenticated)', 'account', 'setup-profile'),
+    { recursive: true }
+  );
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ dependencies: {} }));
+  await fs.writeFile(
+    path.join(root, 'src', 'supacharger.config.ts'),
+    `POST_SIGN_IN_ONBOARDING: { REQUIRED: true, REDIRECT_PATH: '/account/setup-profile' }
+BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?full=1' }
+`
+  );
+  await fs.writeFile(
+    path.join(root, 'src', 'app', '(project)', '(authenticated)', 'layout.tsx'),
+    'await requireAppAccess();\n'
+  );
+  await fs.writeFile(
+    path.join(root, 'src', 'app', '(project)', '(authenticated)', 'account', 'setup-profile', 'page.tsx'),
+    'export default function Page() {}\n'
+  );
+
+  const checks = await inspect(root);
+  assert.equal(checks.find((check) => check.name === 'Onboarding recovery route').ok, true);
+  assert.equal(checks.find((check) => check.name === 'Onboarding recovery boundary').ok, false);
+  assert.match(
+    checks.find((check) => check.name === 'Onboarding recovery boundary').detail,
+    /inherits requireAppAccess/
+  );
+  assert.equal(checks.find((check) => check.name === 'Billing recovery route').ok, false);
 });
