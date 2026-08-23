@@ -11,12 +11,14 @@ const {
   buildUpdatePlan,
   changedManualMergePaths,
   detectPackageManager,
+  installMissingDeveloperStarters,
   matchingPreservedPath,
   migrateAuthProviderConfig,
   migrateLegacyAuthSessionConfig,
   migrateLegacyConfig,
   migrateLegacyPostcssConfig,
   migrateLegacyProjectStyles,
+  migrateLegacyAuthRoutes,
   migrateRootDocumentConfig,
   moveFiles,
   managedFiles,
@@ -359,6 +361,47 @@ test('installs a missing developer-owned starter file', async (t) => {
   await moveFiles(update, root, [relativePath]);
 
   assert.equal(await fs.readFile(path.join(root, relativePath), 'utf8'), 'starter styles\n');
+});
+
+test('installs missing auth presentation starters without overwriting developer customisations', async (t) => {
+  const root = await temporaryDirectory(t);
+  const update = await temporaryDirectory(t);
+  const authStyles = path.join('src', 'styles', 'supacharger-auth.css');
+  const authSidecar = path.join('src', 'supacharger.adapters', 'auth', 'auth-sidecar.tsx');
+  for (const relativePath of [authStyles, authSidecar]) {
+    await fs.mkdir(path.dirname(path.join(update, relativePath)), { recursive: true });
+    await fs.writeFile(path.join(update, relativePath), `starter ${relativePath}\n`);
+  }
+  await fs.mkdir(path.dirname(path.join(root, authStyles)), { recursive: true });
+  await fs.writeFile(path.join(root, authStyles), 'developer auth styles\n');
+
+  assert.deepEqual(await installMissingDeveloperStarters(update, root), [authSidecar]);
+  assert.equal(await fs.readFile(path.join(root, authStyles), 'utf8'), 'developer auth styles\n');
+  assert.equal(await fs.readFile(path.join(root, authSidecar), 'utf8'), `starter ${authSidecar}\n`);
+});
+
+test('moves unchanged legacy auth routes out of the developer route group and rejects modified routes', async (t) => {
+  const root = await temporaryDirectory(t);
+  const baseline = await temporaryDirectory(t);
+  const route = path.join(
+    'src',
+    'app',
+    '(project)',
+    '(unauthenticated)',
+    'account',
+    'login',
+    'page.tsx',
+  );
+  for (const directory of [root, baseline]) {
+    await fs.mkdir(path.dirname(path.join(directory, route)), { recursive: true });
+    await fs.writeFile(path.join(directory, route), 'canonical legacy route\n');
+  }
+
+  assert.deepEqual(await migrateLegacyAuthRoutes(root, baseline), [route]);
+  await assert.rejects(fs.access(path.join(root, route)));
+
+  await fs.writeFile(path.join(root, route), 'developer route changes\n');
+  await assert.rejects(migrateLegacyAuthRoutes(root, baseline), /contains application changes/);
 });
 
 test('personalises the core project stylesheet starter without changing established names', async (t) => {

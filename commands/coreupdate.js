@@ -13,6 +13,17 @@ const MANAGED_FILES_MANIFEST = path.join('.supacharger', 'managed-files.json');
 const AUTOMATIC_MERGE_PATHS = new Set(['package.json', 'package-lock.json']);
 const DEFAULT_MIGRATION_PATHS = [path.join('supabase', 'migrations')];
 const PROJECT_STYLES_FILE = path.join('src', 'styles', 'project.css');
+const AUTH_STYLES_FILE = path.join('src', 'styles', 'supacharger-auth.css');
+const AUTH_SIDECAR_FILE = path.join('src', 'supacharger.adapters', 'auth', 'auth-sidecar.tsx');
+const AUTH_DEVELOPER_STARTERS = [AUTH_STYLES_FILE, AUTH_SIDECAR_FILE];
+const LEGACY_AUTH_ROUTE_FILES = [
+  path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'layout.tsx'),
+  path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'login', 'page.tsx'),
+  path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'create', 'page.tsx'),
+  path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'login-magic', 'page.tsx'),
+  path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'reset-password', 'page.tsx'),
+  path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'reset-password', 'new', 'page.tsx'),
+];
 const LEGACY_PROJECT_STYLE_FILES = [
   path.join('src', 'styles', 'globals.css'),
   path.join('src', 'styles', 'globals.scss'),
@@ -29,6 +40,8 @@ const DEVELOPER_OWNED_FILES = [
   path.join('src', 'i18n', 'request.ts'),
   path.join('src', 'assets', 'svgr', 'ui', 'inline-loader-dark.svg'),
   path.join('src', 'assets', 'svgr', 'ui', 'inline-loader.svg'),
+  AUTH_STYLES_FILE,
+  AUTH_SIDECAR_FILE,
   PROJECT_STYLES_FILE,
   CORE_LOCK_FILE,
 ];
@@ -932,6 +945,61 @@ async function moveFiles(updateDir, rootDir, preservedPaths = [], managedPaths =
   }
 }
 
+async function installMissingDeveloperStarters(updateDir, rootDir, relativePaths = AUTH_DEVELOPER_STARTERS) {
+  const installed = [];
+  for (const relPath of relativePaths) {
+    const source = path.join(updateDir, relPath);
+    const target = path.join(rootDir, relPath);
+    try {
+      await fs.access(target);
+      continue;
+    } catch {
+      // A developer-owned starter is copied once, then preserved on later updates.
+    }
+    try {
+      await fs.access(source);
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.copyFile(source, target);
+    installed.push(relPath);
+  }
+  return installed;
+}
+
+async function migrateLegacyAuthRoutes(rootDir, baselineDir) {
+  const removable = [];
+  for (const relPath of LEGACY_AUTH_ROUTE_FILES) {
+    const localPath = path.join(rootDir, relPath);
+    const baselinePath = path.join(baselineDir, relPath);
+    try {
+      await fs.access(localPath);
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    try {
+      if ((await hashFile(localPath)) !== (await hashFile(baselinePath))) {
+        throw new Error(
+          `${relPath} contains application changes. Move them into the auth sidecar adapter before updating the core.`,
+        );
+      }
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        throw new Error(`${relPath} cannot be migrated because it is missing from the installed Core baseline.`);
+      }
+      throw error;
+    }
+    removable.push(relPath);
+  }
+  if (removable.length === 0) return [];
+  await backupConflicts(rootDir, rootDir, removable);
+  for (const relPath of removable) await fs.rm(path.join(rootDir, relPath));
+  return removable;
+}
+
 async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
   const [baselineManifest, latestManifest] = await Promise.all([
     readManagedManifest(baselineDir),
@@ -1111,6 +1179,7 @@ Enter Y to continue: \u001b[0m`;
 
     if (missingFiles.length === 0 && differentFiles.length === 0) {
       console.log('\x1b[32m✓ Local files match the installed core baseline.\x1b[0m');
+      await migrateLegacyAuthRoutes(cwd, updateDir);
       await removeDirContents(updateDir);
       remoteHash = await cloneLatestMain(updateDir);
       const latestManifest = await readManagedManifest(updateDir);
@@ -1135,6 +1204,7 @@ Enter Y to continue: \u001b[0m`;
       const targetsToBackup = [...latestManagedFiles, ...baselineManagedFiles.filter((file) => !latestManagedFiles.includes(file))];
       await backupConflicts(cwd, cwd, targetsToBackup);
       await moveFiles(updateDir, cwd, preservedPaths, latestManifest?.managedPaths ?? null);
+      await installMissingDeveloperStarters(updateDir, cwd);
       await removeObsoleteManagedFiles(cwd, baselineManagedFiles, latestManagedFiles, preservedPaths);
       await migrateLegacyAuthSessionConfig(cwd);
       await migrateAuthProviderConfig(cwd);
@@ -1181,6 +1251,7 @@ Enter Y to continue: \u001b[0m`;
       process.exit(1);
     }
 
+    await migrateLegacyAuthRoutes(cwd, updateDir);
     await fs.rm(updateDir, { recursive: true, force: true });
     await fs.mkdir(updateDir, { recursive: true });
     await cloneAndCheckout(updateDir, remoteHash);
@@ -1222,6 +1293,7 @@ Enter Y to continue: \u001b[0m`;
         ...missingFiles,
       ], latestManifest?.managedPaths ?? null);
     }
+    await installMissingDeveloperStarters(updateDir, cwd);
 
     await removeObsoleteManagedFiles(
       cwd,
@@ -1266,7 +1338,9 @@ coreupdate.testHelpers = {
   migrateLegacyConfig,
   migrateLegacyPostcssConfig,
   migrateLegacyProjectStyles,
+  migrateLegacyAuthRoutes,
   migrateRootDocumentConfig,
+  installMissingDeveloperStarters,
   moveFiles,
   mergeDependencyContract,
   mergeRequiredPackageScripts,

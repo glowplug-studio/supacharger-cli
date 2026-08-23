@@ -10,7 +10,9 @@ Developer CLI for installing and safely updating Supacharger applications.
 
 ## Managed core updates
 
-The canonical core publishes version 2 of `.supacharger/managed-files.json`. It separates byte-identical `managedPaths`, contract-aware `mergeManagedPaths`, append-only `forwardOnlyMigrationPaths`, and preserved `developerOwnedPaths`. Product/account routes under `src/app/(project)/`, presentation, translations, project CSS, and `src/supacharger.adapters/` remain developer-owned.
+The canonical core publishes version 2 of `.supacharger/managed-files.json`. It separates byte-identical `managedPaths`, contract-aware `mergeManagedPaths`, append-only `forwardOnlyMigrationPaths`, and preserved `developerOwnedPaths`. Reusable authentication/account routes live under `src/app/(supacharger)/`; product routes under `src/app/(project)/`, translations, project CSS, and `src/supacharger.adapters/` remain developer-owned.
+
+When managed public authentication routes replace unchanged legacy wrappers under `src/app/(project)/(unauthenticated)/account`, `coreupdate` backs up and removes those wrappers before installing the canonical routes. It stops if a wrapper differs from the installed Core baseline so product behaviour cannot be discarded. The update installs `src/styles/supacharger-auth.css` and `src/supacharger.adapters/auth/auth-sidecar.tsx` only when missing; established product presentation is preserved on every later update.
 
 The developer-owned inline loader variants at `src/assets/svgr/ui/inline-loader.svg` and `src/assets/svgr/ui/inline-loader-dark.svg` are also preserved. An update installs either starter only when that exact path is absent, so it cannot overwrite application branding.
 
