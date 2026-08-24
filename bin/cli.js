@@ -169,8 +169,10 @@ program
 
 program
   .command('coreupdate')
-  .description('Download the latest Supacharger core and check for local conflicts before updating')
+  .description('Update from an immutable Supacharger Core ref and check for local conflicts')
   .option('--plan', 'Show managed writes, removals, dependencies, migrations, and checks without changing the project')
+  .option('--ref <tag-or-commit>', 'Core tag, branch, or commit to install', 'main')
+  .option('--source <path>', 'Maintainer-only local Core checkout source')
   .action((options) => coreupdateCommand(options));
 
 program

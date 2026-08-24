@@ -15,6 +15,8 @@ const AUTOMATIC_MERGE_PATHS = new Set(['package.json', 'package-lock.json']);
 const DEFAULT_MIGRATION_PATHS = [path.join('supabase', 'migrations')];
 const PROJECT_STYLES_FILE = path.join('src', 'styles', 'project.css');
 const AUTH_STYLES_FILE = path.join('src', 'styles', 'supacharger-auth.css');
+const ACCOUNT_STYLES_FILE = path.join('src', 'styles', 'supacharger-account.css');
+const ORGANISATION_STYLES_FILE = path.join('src', 'styles', 'supacharger-organisations.css');
 const AUTH_SIDECAR_FILE = path.join('src', 'supacharger.adapters', 'auth', 'auth-sidecar.tsx');
 const ACCOUNT_ADAPTER_FILES = [
   'details-page.tsx',
@@ -25,6 +27,7 @@ const ACCOUNT_ADAPTER_FILES = [
   'profile-extension.ts',
   'profile-fields.tsx',
   'security-page.tsx',
+  'chrome.tsx',
 ].map((file) => path.join('src', 'supacharger.adapters', 'account', file));
 const BILLING_ADAPTER_FILES = ['acquisition.tsx', 'database.ts', 'organisation.ts']
   .map((file) => path.join('src', 'supacharger.adapters', 'billing', file));
@@ -32,6 +35,8 @@ const ORGANISATION_ADAPTER_FILES = ['profile-extension.ts', 'profile-fields.tsx'
   .map((file) => path.join('src', 'supacharger.adapters', 'organisations', file));
 const DEVELOPER_STARTERS = [
   AUTH_STYLES_FILE,
+  ACCOUNT_STYLES_FILE,
+  ORGANISATION_STYLES_FILE,
   AUTH_SIDECAR_FILE,
   ...ACCOUNT_ADAPTER_FILES,
   ...BILLING_ADAPTER_FILES,
@@ -62,6 +67,8 @@ const DEVELOPER_OWNED_FILES = [
   path.join('src', 'assets', 'svgr', 'ui', 'inline-loader-dark.svg'),
   path.join('src', 'assets', 'svgr', 'ui', 'inline-loader.svg'),
   AUTH_STYLES_FILE,
+  ACCOUNT_STYLES_FILE,
+  ORGANISATION_STYLES_FILE,
   AUTH_SIDECAR_FILE,
   PROJECT_STYLES_FILE,
   CORE_LOCK_FILE,
@@ -682,12 +689,20 @@ async function personaliseStarterProjectStyles(rootDir) {
   await fs.writeFile(projectStylesPath, personalised, 'utf8');
 }
 
-async function getRemoteMainHash(repository = CORE_REPOSITORY) {
+function validateCoreRef(ref) {
+  if (typeof ref !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(ref) || ref.includes('..')) {
+    throw new Error('Core ref must be a tag, branch, or commit containing only safe Git ref characters.');
+  }
+  return ref;
+}
+
+async function getRemoteRefHash(repository = CORE_REPOSITORY, ref = 'main') {
+  validateCoreRef(ref);
   const repositoryUrl = `git@github.com:${repository}.git`;
-  const { stdout } = await execCommand(`git ls-remote ${repositoryUrl} refs/heads/main`);
-  const commit = stdout.trim().split(/\s+/)[0];
+  const { stdout } = await execCommand(`git ls-remote ${repositoryUrl} "${ref}" "refs/heads/${ref}" "refs/tags/${ref}^{}"`);
+  const commit = /^[a-f0-9]{40}$/.test(ref) ? ref : stdout.trim().split(/\s+/)[0];
   if (!/^[a-f0-9]{40}$/.test(commit ?? '')) {
-    throw new Error(`Could not resolve the main branch for ${repository}.`);
+    throw new Error(`Could not resolve Core ref ${ref} for ${repository}.`);
   }
   return commit;
 }
@@ -1033,7 +1048,16 @@ async function runPostUpdateSteps(rootDir, assessment, options = {}) {
   }
   await run('npx supabase db push --linked --yes', { cwd: rootDir });
   const migrationList = await run('npx supabase migration list --linked --output json', { cwd: rootDir });
-  const linkedMigrations = JSON.parse(migrationList.stdout).migrations ?? [];
+  let linkedMigrations;
+  try {
+    linkedMigrations = JSON.parse(migrationList.stdout).migrations ?? [];
+  } catch {
+    linkedMigrations = migrationList.stdout
+      .split('\n')
+      .map((line) => line.match(/^\s*`?(\d+)`?\s*\|\s*`?(\d+)`?\s*\|/)?.[2])
+      .filter(Boolean)
+      .map((remote) => ({ remote }));
+  }
   for (const migration of assessment.changedMigrations) {
     const version = path.basename(migration.path).match(/^\d+/)?.[0];
     if (!version || !linkedMigrations.some((entry) => entry.remote === version)) {
@@ -1053,6 +1077,8 @@ async function runPostUpdateChecks(rootDir, manifest, options = {}) {
   for (const check of requestedChecks) {
     if (check === 'typecheck') {
       await run('npx tsc --noEmit', { cwd: rootDir });
+    } else if (check === 'lint' && scripts[check]) {
+      await run(`${packageManager} run ${check} -- --ignore-pattern .supacharger/backups`, { cwd: rootDir });
     } else if (scripts[check]) {
       await run(`${packageManager} run ${check}`, { cwd: rootDir });
     } else {
@@ -1138,25 +1164,44 @@ async function removeObsoleteManagedFiles(rootDir, baselineFiles, incomingFiles,
 
 
 // Clone latest main branch fully (used when no conflicts)
-async function cloneLatestMain(updateDir) {
+async function cloneLatestSource(updateDir, { ref = 'main', repository = CORE_REPOSITORY, source = null } = {}) {
   await removeDirContents(updateDir);
+  if (source) {
+    const resolvedSource = path.resolve(source);
+    const { stdout: status } = await execCommand('git status --porcelain', { cwd: resolvedSource });
+    if (status.trim()) throw new Error('The local Core source must be committed and clean before it can be installed.');
+    await fs.cp(resolvedSource, updateDir, {
+      recursive: true,
+      filter: (entry) => !entry.split(path.sep).some((part) => part === '.git' || part === 'node_modules' || part === '.next'),
+    });
+    const { stdout } = await execCommand('git rev-parse HEAD', { cwd: resolvedSource });
+    return stdout.trim();
+  }
 
-  console.log('\x1b[34mProceeding to clone the main branch latest commit into the update directory.\x1b[0m');
-
-  await execCommand(
-    `git clone --depth 1 --branch main ${CORE_SSH_URL} "${updateDir}"`
-  );
+  validateCoreRef(ref);
+  const repositoryUrl = `git@github.com:${repository}.git`;
+  console.log(`\x1b[34mCloning Core ref ${ref} into the update directory.\x1b[0m`);
+  await execCommand(`git clone --no-checkout ${repositoryUrl} "${updateDir}"`);
+  await execCommand(`git -C "${updateDir}" fetch --depth 1 origin "${ref}"`);
+  await execCommand(`git -C "${updateDir}" checkout --detach FETCH_HEAD`);
   const { stdout } = await execCommand('git rev-parse HEAD', { cwd: updateDir });
-  console.log('\x1b[32mLatest main branch cloned.\x1b[0m');
+  await removeGitDir(updateDir);
+  console.log('\x1b[32mRequested Core ref cloned.\x1b[0m');
   return stdout.trim();
 }
 
-async function cloneAndCheckout(updateDir, commitHash, repository = CORE_REPOSITORY) {
+async function cloneAndCheckout(updateDir, commitHash, repository = CORE_REPOSITORY, source = null) {
   await removeDirContents(updateDir);
   console.log('\x1b[34mCloning the installed core baseline commit...\x1b[0m');
-  await execCommand(
-    `git clone --no-checkout --branch main git@github.com:${repository}.git "${updateDir}"`
-  );
+  if (source) {
+    const resolvedSource = path.resolve(source);
+    await execCommand(`git cat-file -e "${commitHash}^{commit}"`, { cwd: resolvedSource });
+    await execCommand(`git clone --no-checkout "${resolvedSource}" "${updateDir}"`);
+  } else {
+    await execCommand(
+      `git clone --no-checkout --branch main git@github.com:${repository}.git "${updateDir}"`
+    );
+  }
   await execCommand(`git -C "${updateDir}" config advice.detachedHead false`);
   console.log(`\x1b[34mChecking out commit ${commitHash}...\x1b[0m`);
   await execCommand(`git -C "${updateDir}" checkout ${commitHash}`);
@@ -1295,15 +1340,15 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
   };
 }
 
-async function printPlan(rootDir, installState) {
+async function printPlan(rootDir, installState, options = {}) {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'supacharger-core-plan-'));
   const baselineDir = path.join(tempRoot, 'baseline');
   const latestDir = path.join(tempRoot, 'latest');
   await fs.mkdir(baselineDir);
   await fs.mkdir(latestDir);
   try {
-    await cloneAndCheckout(baselineDir, installState.commit, installState.repository);
-    await cloneLatestMain(latestDir);
+    await cloneAndCheckout(baselineDir, installState.commit, installState.repository, options.source);
+    await cloneLatestSource(latestDir, { ref: options.ref, repository: installState.repository, source: options.source });
     const plan = await buildUpdatePlan(rootDir, baselineDir, latestDir);
     console.log('\nSupacharger core update plan (no project files or databases changed)');
     console.log(`Managed writes: ${plan.writes.length}`);
@@ -1352,7 +1397,7 @@ async function coreupdate(options = {}) {
     }
 
     if (options.plan === true) {
-      await printPlan(cwd, installState);
+      await printPlan(cwd, installState, options);
       return;
     }
 
@@ -1379,14 +1424,16 @@ Enter Y to continue: \u001b[0m`;
     const localHash = installState.commit;
     console.log(`\x1b[34mCurrent core commit:\x1b[0m \x1b[32m${localHash}\x1b[0m`);
 
-    let remoteHash = await getRemoteMainHash(installState.repository);
-    console.log(`\x1b[34mLatest remote main branch commit hash:\x1b[0m \x1b[32m${remoteHash}\x1b[0m`);
+    let remoteHash = options.source
+      ? (await execCommand('git rev-parse HEAD', { cwd: path.resolve(options.source) })).stdout.trim()
+      : await getRemoteRefHash(installState.repository, options.ref);
+    console.log(`\x1b[34mRequested Core commit hash:\x1b[0m \x1b[32m${remoteHash}\x1b[0m`);
 
     await fs.rm(updateDir, { recursive: true, force: true });
     await fs.mkdir(updateDir, { recursive: true });
     console.log(`\x1b[34mCreated or cleaned directory:\x1b[0m \x1b[32m${updateDir}\x1b[0m`);
 
-    await cloneAndCheckout(updateDir, localHash, installState.repository);
+    await cloneAndCheckout(updateDir, localHash, installState.repository, options.source);
 
     console.log('\x1b[34m\nChecking Core Integrity...\x1b[0m');
 
@@ -1429,7 +1476,7 @@ Enter Y to continue: \u001b[0m`;
       console.log('\x1b[32m✓ Local files match the installed core baseline.\x1b[0m');
       await migrateLegacyAuthRoutes(cwd, updateDir);
       await removeDirContents(updateDir);
-      remoteHash = await cloneLatestMain(updateDir);
+      remoteHash = await cloneLatestSource(updateDir, { ref: options.ref, repository: installState.repository, source: options.source });
       const latestManifest = await readManagedManifest(updateDir);
       const latestManagedFiles = await managedFiles(updateDir, latestManifest);
       const manualMergeChanges = await changedManualMergePathsFromHashes(
@@ -1466,6 +1513,7 @@ Enter Y to continue: \u001b[0m`;
         await fs.rm(updateDir, { recursive: true, force: true });
         return;
       }
+      await fs.rm(updateDir, { recursive: true, force: true });
       await runPostUpdateChecks(cwd, latestManifest);
       await verifyManagedFiles(cwd, latestManagedHashes);
       await writeCoreLock(cwd, remoteHash);
@@ -1504,7 +1552,11 @@ Enter Y to continue: \u001b[0m`;
     await migrateLegacyAuthRoutes(cwd, updateDir);
     await fs.rm(updateDir, { recursive: true, force: true });
     await fs.mkdir(updateDir, { recursive: true });
-    await cloneAndCheckout(updateDir, remoteHash);
+    await cloneLatestSource(updateDir, {
+      ref: options.ref,
+      repository: installState.repository,
+      source: options.source,
+    });
     const latestManifest = await readManagedManifest(updateDir);
     const latestManagedFiles = await managedFiles(updateDir, latestManifest);
     const preservedPaths = latestManifest?.developerOwnedPaths ?? DEVELOPER_OWNED_PATHS;
@@ -1564,6 +1616,7 @@ Enter Y to continue: \u001b[0m`;
       await fs.rm(updateDir, { recursive: true, force: true });
       return;
     }
+    await fs.rm(updateDir, { recursive: true, force: true });
     await runPostUpdateChecks(cwd, latestManifest);
     await verifyManagedFiles(cwd, latestManagedHashes);
     await writeCoreLock(cwd, remoteHash);

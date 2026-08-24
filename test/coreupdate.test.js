@@ -603,6 +603,29 @@ test('installs changed dependencies and verifies changed migrations before compl
   assert.ok(commands.every(({ cwd }) => cwd === root));
 });
 
+test('accepts the table migration ledger emitted by Supabase CLI versions that ignore JSON output', async (t) => {
+  const root = await temporaryDirectory(t);
+  const update = await temporaryDirectory(t);
+  const migration = path.join('supabase', 'migrations', '20260824130917_claims.sql');
+
+  await fs.mkdir(path.join(update, 'supabase', 'migrations'), { recursive: true });
+  await fs.writeFile(path.join(root, 'package.json'), `${JSON.stringify({ name: 'consumer', dependencies: {} })}\n`);
+  await fs.writeFile(path.join(update, 'package.json'), `${JSON.stringify({ name: 'consumer', dependencies: {} })}\n`);
+  await fs.writeFile(path.join(update, migration), 'select 1;\n');
+
+  const assessment = await assessPostUpdateWork(root, update);
+  const completed = await runPostUpdateSteps(root, assessment, {
+    run: async (command) => ({
+      stdout: command.includes('migration list')
+        ? '  Local            | Remote           | Time (UTC)\n  20260824130917   | 20260824130917   | 2026-08-24 13:09:17\n'
+        : '',
+    }),
+    confirm: async () => 'y',
+  });
+
+  assert.equal(completed, true);
+});
+
 test('installs missing required Core scripts without overwriting consumer scripts', async (t) => {
   const root = await temporaryDirectory(t);
   const update = await temporaryDirectory(t);
@@ -845,7 +868,10 @@ test('removes only obsolete managed files and requires every declared check', as
   await runPostUpdateChecks(root, { postUpdateChecks: ['lint', 'typecheck'] }, {
     run: async (command) => commands.push(command),
   });
-  assert.deepEqual(commands, ['npm run lint', 'npx tsc --noEmit']);
+  assert.deepEqual(commands, [
+    'npm run lint -- --ignore-pattern .supacharger/backups',
+    'npx tsc --noEmit',
+  ]);
   await assert.rejects(
     runPostUpdateChecks(root, { postUpdateChecks: ['missing'] }, { run: async () => {} }),
     /Required post-update check is unavailable/,

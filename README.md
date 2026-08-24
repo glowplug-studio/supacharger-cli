@@ -23,8 +23,11 @@ Core updates distribute `requireVerifiedUser()`, `requireOnboardedUser()`, and `
 `supacharger init` installs the complete `src/app/layout.tsx` starter. The manifest then classifies that file as a developer-owned template, so `coreupdate` preserves application fonts, providers, body classes, and extra head content. Shared metadata, SEO, viewport, favicon, and analytics fixes continue through the managed `src/supacharger/root-document.tsx` helper.
 
 ```bash
-supacharger coreupdate --plan
-supacharger coreupdate
+supacharger coreupdate --plan --ref <tag-or-commit>
+supacharger coreupdate --ref <tag-or-commit>
+
+# Maintainers may plan from a clean local Core checkout:
+supacharger coreupdate --plan --source ../supacharger
 ```
 
 `--plan` clones the installed baseline and latest core into an operating-system temporary directory, then reports writes, obsolete managed removals, dependency changes, migrations, and post-update checks without changing the application or a database.
