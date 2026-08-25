@@ -17,6 +17,8 @@ const {
   migrateAccountAlignmentConfig,
   migrateAuthProviderConfig,
   migrateLegacyAuthSessionConfig,
+  migrateLegacyMfaConfig,
+  migrateLocalTotpConfig,
   migrateLegacyConfig,
   migrateLegacyPostcssConfig,
   migrateLegacyProjectStyles,
@@ -106,6 +108,47 @@ test('removes the legacy configurable auth verification mode', async (t) => {
   assert.match(migrated, /ALLOW_ANONYMOUS_USERS: false/);
 });
 
+test('removes only the obsolete MFA visibility flag and preserves enforcement policy', async (t) => {
+  const root = await temporaryDirectory(t);
+  const configPath = path.join(root, 'src', 'supacharger.config.ts');
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(
+    configPath,
+    "AUTHENTICATION: {\n  MFA_TOTP: { ENABLED: true, REQUIRED_FOR_SIGN_IN: true },\n},\n",
+    'utf8',
+  );
+
+  assert.deepEqual(await migrateLegacyMfaConfig(root, { plan: true }), [
+    'AUTHENTICATION.MFA_TOTP.ENABLED',
+  ]);
+  await migrateLegacyMfaConfig(root, { backup: false });
+
+  const migrated = await fs.readFile(configPath, 'utf8');
+  assert.doesNotMatch(migrated, /\bENABLED\s*:/);
+  assert.match(migrated, /REQUIRED_FOR_SIGN_IN:\s*true/);
+});
+
+test('enables both local Supabase TOTP APIs without changing other MFA providers', async (t) => {
+  const root = await temporaryDirectory(t);
+  const configPath = path.join(root, 'supabase', 'config.toml');
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(
+    configPath,
+    '[auth.mfa.totp]\nenroll_enabled = false\nverify_enabled = false\n\n[auth.mfa.phone]\nenroll_enabled = false\nverify_enabled = false\n',
+    'utf8',
+  );
+
+  assert.deepEqual(await migrateLocalTotpConfig(root, { plan: true }), [
+    'auth.mfa.totp.enroll_enabled',
+    'auth.mfa.totp.verify_enabled',
+  ]);
+  await migrateLocalTotpConfig(root, { backup: false });
+
+  const migrated = await fs.readFile(configPath, 'utf8');
+  assert.match(migrated, /\[auth\.mfa\.totp\]\nenroll_enabled = true\nverify_enabled = true/);
+  assert.match(migrated, /\[auth\.mfa\.phone\]\nenroll_enabled = false\nverify_enabled = false/);
+});
+
 test('migrates a legacy developer stylesheet to the project style seam', async (t) => {
   const root = await temporaryDirectory(t);
   const legacyPath = path.join(root, 'src', 'styles', 'globals.css');
@@ -159,6 +202,9 @@ test('preserves existing developer-owned files while moving an update', async (t
     path.join('src', 'assets', 'svgr', 'ui', 'inline-loader-dark.svg'),
     path.join('src', 'assets', 'svgr', 'ui', 'inline-loader.svg'),
     'src/styles/project.css',
+    'src/styles/supacharger-account.css',
+    'src/styles/supacharger-auth.css',
+    'src/styles/supacharger-organisations.css',
   ];
 
   for (const relativePath of developerFiles) {
@@ -500,21 +546,22 @@ test('installs missing billing adapter starters without overwriting developer cu
   assert.equal(await fs.readFile(path.join(root, adapters[2]), 'utf8'), 'developer organisation billing\n');
 });
 
-test('installs missing organisation profile adapter starters without overwriting developer customisations', async (t) => {
+test('installs missing organisation adapter starters without overwriting developer customisations', async (t) => {
   const root = await temporaryDirectory(t);
   const update = await temporaryDirectory(t);
   const adapterDirectory = path.join('src', 'supacharger.adapters', 'organisations');
-  const adapters = ['profile-extension.ts', 'profile-fields.tsx'].map((file) => path.join(adapterDirectory, file));
+  const adapters = ['chrome.tsx', 'navigation.ts', 'pages.tsx', 'profile-extension.ts', 'profile-fields.tsx']
+    .map((file) => path.join(adapterDirectory, file));
 
   for (const relativePath of adapters) {
     await fs.mkdir(path.dirname(path.join(update, relativePath)), { recursive: true });
     await fs.writeFile(path.join(update, relativePath), `starter ${relativePath}\n`);
   }
   await fs.mkdir(path.dirname(path.join(root, adapters[0])), { recursive: true });
-  await fs.writeFile(path.join(root, adapters[0]), 'developer extension\n');
+  await fs.writeFile(path.join(root, adapters[0]), 'developer chrome\n');
 
-  assert.deepEqual(await installMissingDeveloperStarters(update, root), [adapters[1]]);
-  assert.equal(await fs.readFile(path.join(root, adapters[0]), 'utf8'), 'developer extension\n');
+  assert.deepEqual(await installMissingDeveloperStarters(update, root), adapters.slice(1));
+  assert.equal(await fs.readFile(path.join(root, adapters[0]), 'utf8'), 'developer chrome\n');
 });
 
 test('moves unchanged legacy auth routes out of the developer route group and rejects modified routes', async (t) => {
@@ -891,4 +938,16 @@ test('detects manual merge-managed changes and refuses a false exact-file verifi
   assert.deepEqual(await changedManualMergePaths(baseline, latest, manifest), [relativePath]);
   const expectedHashes = await managedFileHashes(latest, [relativePath]);
   await assert.rejects(verifyManagedFiles(root, expectedHashes), /Managed files do not match/);
+});
+
+test('treats local Supabase config as automatically merge-managed', async (t) => {
+  const baseline = await temporaryDirectory(t);
+  const latest = await temporaryDirectory(t);
+  const manifest = { mergeManagedPaths: ['supabase/config.toml'] };
+  for (const [directory, value] of [[baseline, 'false'], [latest, 'true']]) {
+    await fs.mkdir(path.join(directory, 'supabase'), { recursive: true });
+    await fs.writeFile(path.join(directory, 'supabase', 'config.toml'), `[auth.mfa.totp]\nenroll_enabled = ${value}\n`);
+  }
+
+  assert.deepEqual(await changedManualMergePaths(baseline, latest, manifest), []);
 });

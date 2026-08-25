@@ -11,7 +11,7 @@ const CORE_SSH_URL = `git@github.com:${CORE_REPOSITORY}.git`;
 const CORE_LOCK_FILE = path.join('.supacharger', 'core-lock.json');
 const MANAGED_FILES_MANIFEST = path.join('.supacharger', 'managed-files.json');
 const MIGRATION_ALIASES_FILE = path.join('.supacharger', 'migration-aliases.json');
-const AUTOMATIC_MERGE_PATHS = new Set(['package.json', 'package-lock.json']);
+const AUTOMATIC_MERGE_PATHS = new Set(['package.json', 'package-lock.json', 'supabase/config.toml']);
 const DEFAULT_MIGRATION_PATHS = [path.join('supabase', 'migrations')];
 const PROJECT_STYLES_FILE = path.join('src', 'styles', 'project.css');
 const AUTH_STYLES_FILE = path.join('src', 'styles', 'supacharger-auth.css');
@@ -31,7 +31,13 @@ const ACCOUNT_ADAPTER_FILES = [
 ].map((file) => path.join('src', 'supacharger.adapters', 'account', file));
 const BILLING_ADAPTER_FILES = ['acquisition.tsx', 'database.ts', 'organisation.ts']
   .map((file) => path.join('src', 'supacharger.adapters', 'billing', file));
-const ORGANISATION_ADAPTER_FILES = ['profile-extension.ts', 'profile-fields.tsx']
+const ORGANISATION_ADAPTER_FILES = [
+  'chrome.tsx',
+  'navigation.ts',
+  'pages.tsx',
+  'profile-extension.ts',
+  'profile-fields.tsx',
+]
   .map((file) => path.join('src', 'supacharger.adapters', 'organisations', file));
 const DEVELOPER_STARTERS = [
   AUTH_STYLES_FILE,
@@ -327,6 +333,82 @@ async function migrateLegacyAuthSessionConfig(rootDir, options = {}) {
   await fs.writeFile(configPath, content.replace(legacyProperty, '').replace(/\n{3,}/g, '\n\n'), 'utf8');
   console.log('\x1b[34mRemoved legacy AUTH_SESSION.VERIFICATION_MODE; Proxy verification is now always getClaims().\x1b[0m');
   return ['AUTH_SESSION.VERIFICATION_MODE'];
+}
+
+async function migrateLegacyMfaConfig(rootDir, options = {}) {
+  const configPath = path.join(rootDir, 'src', 'supacharger.config.ts');
+  let source;
+  try {
+    source = await fs.readFile(configPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+
+  const bounds = objectBlockBounds(source, 'MFA_TOTP');
+  if (!bounds) return [];
+  const block = source.slice(bounds.open, bounds.close + 1);
+  const legacyProperty = /\bENABLED\s*:\s*(?:true|false),?\s*/;
+  if (!legacyProperty.test(block)) return [];
+  if (options.plan === true) return ['AUTHENTICATION.MFA_TOTP.ENABLED'];
+
+  if (options.backup !== false) {
+    await backupConflicts(rootDir, rootDir, ['src/supacharger.config.ts']);
+  }
+  const migratedBlock = block.replace(legacyProperty, '').replace(/\n{3,}/g, '\n\n');
+  await fs.writeFile(
+    configPath,
+    `${source.slice(0, bounds.open)}${migratedBlock}${source.slice(bounds.close + 1)}`,
+    'utf8',
+  );
+  console.log('\x1b[34mRemoved obsolete AUTHENTICATION.MFA_TOTP.ENABLED; factor management is always available.\x1b[0m');
+  return ['AUTHENTICATION.MFA_TOTP.ENABLED'];
+}
+
+function tomlSectionBounds(source, sectionName) {
+  const heading = new RegExp(`^\\[${sectionName.replaceAll('.', '\\\\.')}\\]\\s*$`, 'm').exec(source);
+  if (!heading) return null;
+  const nextHeading = /^\[[^\n]+\]\s*$/gm;
+  nextHeading.lastIndex = heading.index + heading[0].length;
+  const next = nextHeading.exec(source);
+  return { start: heading.index, end: next?.index ?? source.length };
+}
+
+async function migrateLocalTotpConfig(rootDir, options = {}) {
+  const configPath = path.join(rootDir, 'supabase', 'config.toml');
+  let source;
+  try {
+    source = await fs.readFile(configPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+
+  const bounds = tomlSectionBounds(source, 'auth.mfa.totp');
+  const section = bounds ? source.slice(bounds.start, bounds.end) : '';
+  const changes = ['enroll_enabled', 'verify_enabled'].filter(
+    (key) => !new RegExp(`^${key}\\s*=\\s*true\\s*$`, 'm').test(section),
+  );
+  if (changes.length === 0 || options.plan === true) return changes.map((key) => `auth.mfa.totp.${key}`);
+
+  if (options.backup !== false) {
+    await backupConflicts(rootDir, rootDir, ['supabase/config.toml']);
+  }
+  let migrated = source;
+  if (!bounds) {
+    migrated = `${source.replace(/\s*$/, '')}\n\n[auth.mfa.totp]\nenroll_enabled = true\nverify_enabled = true\n`;
+  } else {
+    let migratedSection = section;
+    for (const key of ['enroll_enabled', 'verify_enabled']) {
+      const property = new RegExp(`^${key}\\s*=.*$`, 'm');
+      if (property.test(migratedSection)) migratedSection = migratedSection.replace(property, `${key} = true`);
+      else migratedSection = `${migratedSection.replace(/\s*$/, '')}\n${key} = true\n`;
+    }
+    migrated = `${source.slice(0, bounds.start)}${migratedSection}${source.slice(bounds.end)}`;
+  }
+  await fs.writeFile(configPath, migrated, 'utf8');
+  console.log('\x1b[34mEnabled local Supabase TOTP enrolment and verification APIs. Restart the local stack to apply them.\x1b[0m');
+  return changes.map((key) => `auth.mfa.totp.${key}`);
 }
 
 function objectBlockBounds(source, objectName) {
@@ -1297,6 +1379,8 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     authProviderConfigMigration,
     englishCatalogueAdditions,
     legacyAuthSessionConfigMigration,
+    legacyMfaConfigMigration,
+    localTotpConfigMigration,
     rootDocumentConfigMigration,
   ] = await Promise.all([
     managedFiles(baselineDir, baselineManifest),
@@ -1310,6 +1394,8 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     migrateAuthProviderConfig(rootDir, { plan: true }),
     mergeEnglishCatalogue(rootDir, latestDir, { plan: true }),
     migrateLegacyAuthSessionConfig(rootDir, { plan: true }),
+    migrateLegacyMfaConfig(rootDir, { plan: true }),
+    migrateLocalTotpConfig(rootDir, { plan: true }),
     migrateRootDocumentConfig(rootDir, { plan: true }),
   ]);
   const writes = [];
@@ -1333,6 +1419,8 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     latestFiles,
     latestManifest,
     legacyAuthSessionConfigMigration,
+    legacyMfaConfigMigration,
+    localTotpConfigMigration,
     manualMergeChanges: await changedManualMergePaths(baselineDir, latestDir, latestManifest),
     removals,
     rootDocumentConfigMigration,
@@ -1367,12 +1455,15 @@ async function printPlan(rootDir, installState, options = {}) {
     console.log(`Manual merge-managed changes: ${plan.manualMergeChanges.length}`);
     plan.manualMergeChanges.forEach((file) => console.log(`  MANUAL MERGE ${file}`));
     console.log(
-      `Developer config changes: ${plan.accountAlignmentConfigMigration.length + plan.authProviderConfigMigration.length + plan.legacyAuthSessionConfigMigration.length + plan.rootDocumentConfigMigration.length}`
+      `Developer config changes: ${plan.accountAlignmentConfigMigration.length + plan.authProviderConfigMigration.length + plan.legacyAuthSessionConfigMigration.length + plan.legacyMfaConfigMigration.length + plan.rootDocumentConfigMigration.length}`
     );
     plan.accountAlignmentConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
     plan.authProviderConfigMigration.forEach((provider) => console.log(`  CONFIG AUTH_PROVDERS_ENABLED.${provider}=false`));
     plan.legacyAuthSessionConfigMigration.forEach((key) => console.log(`  CONFIG REMOVE ${key}`));
+    plan.legacyMfaConfigMigration.forEach((key) => console.log(`  CONFIG REMOVE ${key}`));
     plan.rootDocumentConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
+    console.log(`Local Supabase TOTP changes: ${plan.localTotpConfigMigration.length}`);
+    plan.localTotpConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}=true`));
     console.log(`Canonical English message additions: ${plan.englishCatalogueAdditions.length}`);
     plan.englishCatalogueAdditions.forEach((key) => console.log(`  MESSAGE ${key}`));
     console.log(`Post-update checks: ${(plan.latestManifest?.postUpdateChecks ?? []).join(', ') || 'none'}`);
@@ -1502,6 +1593,8 @@ Enter Y to continue: \u001b[0m`;
       await installMissingDeveloperStarters(updateDir, cwd);
       await removeObsoleteManagedFiles(cwd, baselineManagedFiles, latestManagedFiles, preservedPaths);
       await migrateLegacyAuthSessionConfig(cwd);
+      await migrateLegacyMfaConfig(cwd);
+      await migrateLocalTotpConfig(cwd);
       await migrateAuthProviderConfig(cwd);
       await migrateRootDocumentConfig(cwd);
       await migrateAccountAlignmentConfig(cwd);
@@ -1605,6 +1698,8 @@ Enter Y to continue: \u001b[0m`;
     );
 
     await migrateLegacyAuthSessionConfig(cwd);
+    await migrateLegacyMfaConfig(cwd);
+    await migrateLocalTotpConfig(cwd);
     await migrateAuthProviderConfig(cwd);
     await migrateRootDocumentConfig(cwd);
     await migrateAccountAlignmentConfig(cwd);
@@ -1641,6 +1736,8 @@ coreupdate.testHelpers = {
   migrateAuthProviderConfig,
   migrateAccountAlignmentConfig,
   migrateLegacyAuthSessionConfig,
+  migrateLegacyMfaConfig,
+  migrateLocalTotpConfig,
   migrateLegacyConfig,
   migrateLegacyPostcssConfig,
   migrateLegacyProjectStyles,

@@ -40,7 +40,8 @@ test('recognises the canonical Supabase authentication contract', async (t) => {
   );
   await fs.writeFile(
     path.join(root, 'src', 'supacharger.config.ts'),
-    `AUTH_SESSION ALLOW_ANONYMOUS_USERS PATH_AUTH_GUARD AUTHENTICATION EMAIL_PASSWORD PASSWORDLESS_EMAIL OTP_LENGTH SIGN_UP_EMAIL_VERIFICATION MFA_TOTP PROFILE_IDENTITY AVATAR HEADER_IMAGE ACCOUNT_SETTINGS LANGUAGE CANCEL_ACCOUNT PRODUCT_PROFILE_PATH ORGANISATIONS AUTHENTICATION_HANDLE CHOOSER_PATH ROUTE_MODE PROFILE_MEDIA ACCOUNT_SUBJECTS PERSONAL ORGANISATION
+    `AUTH_SESSION ALLOW_ANONYMOUS_USERS PATH_AUTH_GUARD AUTHENTICATION EMAIL_PASSWORD PASSWORDLESS_EMAIL OTP_LENGTH SIGN_UP_EMAIL_VERIFICATION PROFILE_IDENTITY AVATAR HEADER_IMAGE ACCOUNT_SETTINGS LANGUAGE CANCEL_ACCOUNT PRODUCT_PROFILE_PATH ORGANISATIONS AUTHENTICATION_HANDLE CHOOSER_PATH ROUTE_MODE PROFILE_MEDIA ACCOUNT_SUBJECTS PERSONAL ORGANISATION
+MFA_TOTP: { REQUIRED_FOR_SIGN_IN: false }
 POST_SIGN_IN_ONBOARDING: { REQUIRED: true, REDIRECT_PATH: '/account/setup-profile' }
 BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?full=1' }
 `
@@ -52,9 +53,14 @@ BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?ful
   for (const relativePath of [
     path.join('src', 'app', '(supacharger)', '(authenticated)', 'account', 'organisation', 'page.tsx'),
     path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'page.tsx'),
+    path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', '[section]', 'page.tsx'),
     path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'team', 'page.tsx'),
+    path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'team', '[teamTab]', 'page.tsx'),
     path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'billing', 'page.tsx'),
     path.join('src', 'app', '(supacharger)', 'api', 'organisations', 'route.ts'),
+    path.join('src', 'supacharger.adapters', 'organisations', 'chrome.tsx'),
+    path.join('src', 'supacharger.adapters', 'organisations', 'navigation.ts'),
+    path.join('src', 'supacharger.adapters', 'organisations', 'pages.tsx'),
     path.join('src', 'supacharger.adapters', 'organisations', 'profile-extension.ts'),
     path.join('src', 'supacharger.adapters', 'organisations', 'profile-fields.tsx'),
   ]) {
@@ -86,7 +92,7 @@ BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?ful
   );
   await fs.writeFile(
     path.join(root, 'supabase', 'config.toml'),
-    '[auth.hook.custom_access_token]\nenabled = true\nuri = "pg-functions://postgres/app/custom_access_token_hook"\n'
+    '[auth.hook.custom_access_token]\nenabled = true\nuri = "pg-functions://postgres/app/custom_access_token_hook"\n\n[auth.mfa.totp]\nenroll_enabled = true\nverify_enabled = true\n'
   );
   await fs.writeFile(
     path.join(root, 'supabase', 'migrations', '20260813000000_claims.sql'),
@@ -118,7 +124,28 @@ BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?ful
   );
 
   const checks = await inspect(root);
-  assert.ok(checks.every((check) => check.ok));
+  assert.ok(checks.every((check) => check.ok), checks.filter((check) => !check.ok).map((check) => check.name).join(', '));
+});
+
+test('reports route-group pages that resolve to the same public path', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'supacharger-doctor-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ dependencies: {} }));
+  const routes = [
+    path.join('src', 'app', '(project)', '[handle]', 'settings', 'page.tsx'),
+    path.join('src', 'app', '(supacharger)', '[handle]', 'settings', 'page.tsx'),
+  ];
+  for (const route of routes) {
+    await fs.mkdir(path.dirname(path.join(root, route)), { recursive: true });
+    await fs.writeFile(path.join(root, route), 'export default function Page() {}\n');
+  }
+
+  const checks = await inspect(root);
+  const uniqueRoutes = checks.find((check) => check.name === 'Unique App Router pages');
+  assert.equal(uniqueRoutes.ok, false);
+  assert.match(uniqueRoutes.detail, /\/\[handle\]\/settings/);
+  assert.match(uniqueRoutes.detail, /\(project\)/);
+  assert.match(uniqueRoutes.detail, /\(supacharger\)/);
 });
 
 test('reports missing hook and claims migration without reading secret values', async (t) => {
@@ -153,6 +180,30 @@ test('reports deprecated billing-gate properties without rewriting developer con
   assert.match(deprecatedCheck.detail, /ACCOUNT_ENFORCE_SUBSCRIPTION_PATH/);
   assert.match(deprecatedCheck.detail, /back up src\/supacharger\.config\.ts/);
   assert.equal(await fs.readFile(configPath, 'utf8'), source);
+});
+
+test('reports obsolete MFA visibility config and disabled local TOTP APIs', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'supacharger-doctor-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'src'), { recursive: true });
+  await fs.mkdir(path.join(root, 'supabase'), { recursive: true });
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ dependencies: {} }));
+  await fs.writeFile(
+    path.join(root, 'src', 'supacharger.config.ts'),
+    'AUTHENTICATION EMAIL_PASSWORD PASSWORDLESS_EMAIL OTP_LENGTH SIGN_UP_EMAIL_VERIFICATION\nMFA_TOTP: { ENABLED: true, REQUIRED_FOR_SIGN_IN: true }\n',
+  );
+  await fs.writeFile(
+    path.join(root, 'supabase', 'config.toml'),
+    '[auth.mfa.totp]\nenroll_enabled = false\nverify_enabled = false\n',
+  );
+
+  const checks = await inspect(root);
+  const journey = checks.find((check) => check.name === 'Authentication journey configuration');
+  const localTotp = checks.find((check) => check.name === 'Local TOTP MFA APIs');
+  assert.equal(journey.ok, false);
+  assert.match(journey.detail, /MFA_TOTP\.ENABLED/);
+  assert.equal(localTotp.ok, false);
+  assert.match(localTotp.detail, /restart the local Supabase stack/);
 });
 
 test('reports a missing managed Bruno package script and assets', async (t) => {

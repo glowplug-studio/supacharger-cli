@@ -12,11 +12,16 @@ const LEGACY_ROUTE_PATHS = [
 const ORGANISATION_ROUTE_FILES = [
   path.join('src', 'app', '(supacharger)', '(authenticated)', 'account', 'organisation', 'page.tsx'),
   path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'page.tsx'),
+  path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', '[section]', 'page.tsx'),
   path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'team', 'page.tsx'),
+  path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'team', '[teamTab]', 'page.tsx'),
   path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'billing', 'page.tsx'),
   path.join('src', 'app', '(supacharger)', 'api', 'organisations', 'route.ts'),
 ];
 const ORGANISATION_ADAPTER_FILES = [
+  path.join('src', 'supacharger.adapters', 'organisations', 'chrome.tsx'),
+  path.join('src', 'supacharger.adapters', 'organisations', 'navigation.ts'),
+  path.join('src', 'supacharger.adapters', 'organisations', 'pages.tsx'),
   path.join('src', 'supacharger.adapters', 'organisations', 'profile-extension.ts'),
   path.join('src', 'supacharger.adapters', 'organisations', 'profile-fields.tsx'),
 ];
@@ -67,6 +72,11 @@ function readObjectBlock(source, objectName) {
   return '';
 }
 
+function readTomlSection(source, sectionName) {
+  const escapedName = sectionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return source.match(new RegExp(`^\\[${escapedName}\\][ \\t]*\\n([\\s\\S]*?)(?=^\\[[^\\n]+\\][ \\t]*$|(?![\\s\\S]))`, 'm'))?.[1] ?? '';
+}
+
 function readRecoveryPolicy(source, objectName) {
   const block = readObjectBlock(source, objectName);
   const required = /\bREQUIRED\s*:\s*true\b/.test(block)
@@ -108,6 +118,26 @@ async function findRoutePage(rootDir, publicPath) {
     return routeSegments.length === expectedSegments.length &&
       routeSegments.every((segment, index) => segment === expectedSegments[index]);
   }) ?? null;
+}
+
+async function findDuplicateRoutePages(rootDir) {
+  const appDirectory = path.join(rootDir, 'src', 'app');
+  const pages = await walkRoutePages(appDirectory);
+  const pagesByRoute = new Map();
+
+  for (const pagePath of pages) {
+    const routeSegments = path.relative(appDirectory, path.dirname(pagePath))
+      .split(path.sep)
+      .filter((segment) => segment && !(segment.startsWith('(') && segment.endsWith(')')));
+    const publicPath = `/${routeSegments.join('/')}`;
+    const matches = pagesByRoute.get(publicPath) ?? [];
+    matches.push(path.relative(rootDir, pagePath));
+    pagesByRoute.set(publicPath, matches);
+  }
+
+  return [...pagesByRoute]
+    .filter(([, pagesForRoute]) => pagesForRoute.length > 1)
+    .map(([publicPath, pagesForRoute]) => ({ publicPath, pages: pagesForRoute }));
 }
 
 async function readAncestorLayouts(rootDir, pagePath) {
@@ -274,9 +304,12 @@ async function inspect(rootDir = process.cwd()) {
   const missingOrganisationAdapters = (await Promise.all(
     ORGANISATION_ADAPTER_FILES.map(async (file) => [file, await exists(path.join(rootDir, file))])
   )).filter(([, present]) => !present).map(([file]) => file);
+  const duplicateRoutePages = await findDuplicateRoutePages(rootDir);
 
   const onboardingPolicy = readRecoveryPolicy(applicationConfig, 'POST_SIGN_IN_ONBOARDING');
   const billingPolicy = readRecoveryPolicy(applicationConfig, 'BILLING_ACCESS');
+  const mfaTotpPolicy = readObjectBlock(applicationConfig, 'MFA_TOTP');
+  const localTotpConfig = readTomlSection(configSource, 'auth.mfa.totp');
   const [onboardingRoute, billingRoute] = await Promise.all([
     inspectRecoveryRoute(rootDir, onboardingPolicy, ['requireOnboardedUser', 'requireAppAccess']),
     inspectRecoveryRoute(rootDir, billingPolicy, ['requireAppAccess']),
@@ -321,7 +354,22 @@ async function inspect(rootDir = process.cwd()) {
         applicationConfig.includes('PASSWORDLESS_EMAIL') &&
         applicationConfig.includes('OTP_LENGTH') &&
         applicationConfig.includes('SIGN_UP_EMAIL_VERIFICATION') &&
-        applicationConfig.includes('MFA_TOTP'),
+        mfaTotpPolicy.includes('REQUIRED_FOR_SIGN_IN') &&
+        !/\bENABLED\s*:/.test(mfaTotpPolicy),
+      detail: /\bENABLED\s*:/.test(mfaTotpPolicy)
+        ? 'remove obsolete AUTHENTICATION.MFA_TOTP.ENABLED; factor management is always available'
+        : null,
+    },
+    {
+      name: 'Local TOTP MFA APIs',
+      ok:
+        /^enroll_enabled\s*=\s*true$/m.test(localTotpConfig) &&
+        /^verify_enabled\s*=\s*true$/m.test(localTotpConfig),
+      detail:
+        /^enroll_enabled\s*=\s*true$/m.test(localTotpConfig) &&
+        /^verify_enabled\s*=\s*true$/m.test(localTotpConfig)
+          ? null
+          : 'set auth.mfa.totp enroll_enabled and verify_enabled to true, then restart the local Supabase stack',
     },
     {
       name: 'Profile identity and onboarding configuration',
@@ -388,9 +436,16 @@ async function inspect(rootDir = process.cwd()) {
       detail: missingOrganisationRoutes.join(', ') || null,
     },
     {
-      name: 'Organisation profile adapters',
+      name: 'Organisation adapters',
       ok: missingOrganisationAdapters.length === 0,
       detail: missingOrganisationAdapters.join(', ') || null,
+    },
+    {
+      name: 'Unique App Router pages',
+      ok: duplicateRoutePages.length === 0,
+      detail: duplicateRoutePages
+        .map(({ publicPath, pages }) => `${publicPath}: ${pages.join(', ')}`)
+        .join('; ') || null,
     },
     {
       name: 'Obsolete account and organisation routes removed',
@@ -475,6 +530,7 @@ doctor.testHelpers = {
   findClaimsMigration,
   findOrganisationMigration,
   findRecoveryRoutePage: findRoutePage,
+  findDuplicateRoutePages,
   findRpcArgumentMigration,
   inspect,
   inspectRecoveryRoute,
