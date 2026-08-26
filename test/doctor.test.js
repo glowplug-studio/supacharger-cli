@@ -20,6 +20,7 @@ test('recognises the canonical Supabase authentication contract', async (t) => {
         'check:bruno-rpcs': 'node scripts/check-bruno-rpc-parity.mjs',
         'test:organisation-contract': 'node --test test/organisation-management-contract.test.mjs',
         'test:organisation-ui': 'node --test test/organisation-ui-contract.test.mjs',
+        'test:agent-connections': 'node --test test/agent-connections-contract.test.mjs',
       },
       dependencies: { next: '16.3.0', '@supabase/ssr': '0.12.4', '@supabase/supabase-js': '2.112.3' },
     })
@@ -44,6 +45,7 @@ test('recognises the canonical Supabase authentication contract', async (t) => {
 MFA_TOTP: { REQUIRED_FOR_SIGN_IN: false }
 POST_SIGN_IN_ONBOARDING: { REQUIRED: true, REDIRECT_PATH: '/account/setup-profile' }
 BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?full=1' }
+AGENT_CONNECTIONS: { ENABLED: true }
 `
   );
   await fs.writeFile(
@@ -63,6 +65,12 @@ BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?ful
     path.join('src', 'supacharger.adapters', 'organisations', 'pages.tsx'),
     path.join('src', 'supacharger.adapters', 'organisations', 'profile-extension.ts'),
     path.join('src', 'supacharger.adapters', 'organisations', 'profile-fields.tsx'),
+    path.join('src', 'app', '(supacharger)', 'auth', 'oauth', 'consent', 'page.tsx'),
+    path.join('src', 'app', '(supacharger)', '(authenticated)', 'account', 'agents', 'page.tsx'),
+    path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'agents', 'page.tsx'),
+    path.join('src', 'styles', 'supacharger-agents.css'),
+    path.join('src', 'supacharger.adapters', 'agents', 'consent.tsx'),
+    path.join('src', 'supacharger.adapters', 'agents', 'connection-summary.tsx'),
   ]) {
     await fs.mkdir(path.dirname(path.join(root, relativePath)), { recursive: true });
     await fs.writeFile(path.join(root, relativePath), 'export {};\n');
@@ -74,6 +82,7 @@ BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?ful
       AccountSettings: { title: 'Settings' },
       AccountPreferences: { title: 'Preferences' },
       AccountSecurity: { title: 'Security' },
+      AgentConnections: { title: 'Agents' },
       Billing: { title: 'Billing' },
       Organisations: { title: 'Organisations' },
     }),
@@ -92,7 +101,7 @@ BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?ful
   );
   await fs.writeFile(
     path.join(root, 'supabase', 'config.toml'),
-    '[auth.hook.custom_access_token]\nenabled = true\nuri = "pg-functions://postgres/app/custom_access_token_hook"\n\n[auth.mfa.totp]\nenroll_enabled = true\nverify_enabled = true\n'
+    '[auth.hook.custom_access_token]\nenabled = true\nuri = "pg-functions://postgres/app/custom_access_token_hook"\n\n[auth.oauth_server]\nenabled = true\nauthorization_url_path = "/auth/oauth/consent"\nallow_dynamic_registration = true\n\n[auth.mfa.totp]\nenroll_enabled = true\nverify_enabled = true\n'
   );
   await fs.writeFile(
     path.join(root, 'supabase', 'migrations', '20260813000000_claims.sql'),
@@ -103,6 +112,10 @@ BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?ful
     "-- remove_p_prefix_from_exposed_rpc_arguments\ncreate temporary table rpc_argument_rename_grants; select 'api_edge';\n"
   );
   await fs.writeFile(
+    path.join(root, 'supabase', 'migrations', '20260826000000_agent_connections.sql'),
+    'create role supacharger_agent; create table app.agent_connections();\n'
+  );
+  await fs.writeFile(
     path.join(root, '.supacharger', 'managed-files.json'),
     JSON.stringify({
       managedPaths: [
@@ -110,9 +123,10 @@ BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?ful
         'scripts/check-bruno-rpc-parity.mjs',
         'test/organisation-management-contract.test.mjs',
         'test/organisation-ui-contract.test.mjs',
+        'test/agent-connections-contract.test.mjs',
       ],
       developerOwnedPaths: [],
-      postUpdateChecks: ['check:bruno-rpcs', 'test:organisation-contract', 'test:organisation-ui'],
+      postUpdateChecks: ['check:bruno-rpcs', 'test:organisation-contract', 'test:organisation-ui', 'test:agent-connections'],
     })
   );
   await fs.mkdir(path.join(root, 'docs', 'bruno', 'supacharger-rpc'), { recursive: true });

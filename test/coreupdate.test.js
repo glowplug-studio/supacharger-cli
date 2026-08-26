@@ -18,6 +18,7 @@ const {
   migrateAuthProviderConfig,
   migrateLegacyAuthSessionConfig,
   migrateLegacyMfaConfig,
+  migrateLocalAgentConnectionsConfig,
   migrateLocalTotpConfig,
   migrateLegacyConfig,
   migrateLegacyPostcssConfig,
@@ -149,6 +150,42 @@ test('enables both local Supabase TOTP APIs without changing other MFA providers
   assert.match(migrated, /\[auth\.mfa\.phone\]\nenroll_enabled = false\nverify_enabled = false/);
 });
 
+test('synchronises local OAuth Server enablement with agent connection policy', async (t) => {
+  const root = await temporaryDirectory(t);
+  const configPath = path.join(root, 'supabase', 'config.toml');
+  const applicationConfigPath = path.join(root, 'src', 'supacharger.config.ts');
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.mkdir(path.dirname(applicationConfigPath), { recursive: true });
+  await fs.writeFile(applicationConfigPath, 'AGENT_CONNECTIONS: { ENABLED: true },\n', 'utf8');
+  await fs.writeFile(
+    configPath,
+    '[auth.oauth_server]\nenabled = false\nauthorization_url_path = "/old-consent"\nallow_dynamic_registration = true\n',
+    'utf8',
+  );
+
+  assert.deepEqual(await migrateLocalAgentConnectionsConfig(root, { plan: true }), [
+    'auth.oauth_server.enabled',
+    'auth.oauth_server.authorization_url_path',
+  ]);
+  await migrateLocalAgentConnectionsConfig(root, { backup: false });
+
+  const migrated = await fs.readFile(configPath, 'utf8');
+  assert.match(migrated, /\[auth\.oauth_server\]\nenabled = true\nauthorization_url_path = "\/auth\/oauth\/consent"/);
+  assert.match(migrated, /allow_dynamic_registration = true/);
+});
+
+test('installs a disabled local OAuth Server section when agent policy is absent', async (t) => {
+  const root = await temporaryDirectory(t);
+  const configPath = path.join(root, 'supabase', 'config.toml');
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, 'project_id = "example"\n', 'utf8');
+
+  await migrateLocalAgentConnectionsConfig(root, { backup: false });
+  const migrated = await fs.readFile(configPath, 'utf8');
+  assert.match(migrated, /\[auth\.oauth_server\]\nenabled = false/);
+  assert.match(migrated, /allow_dynamic_registration = false/);
+});
+
 test('migrates a legacy developer stylesheet to the project style seam', async (t) => {
   const root = await temporaryDirectory(t);
   const legacyPath = path.join(root, 'src', 'styles', 'globals.css');
@@ -203,6 +240,7 @@ test('preserves existing developer-owned files while moving an update', async (t
     path.join('src', 'assets', 'svgr', 'ui', 'inline-loader.svg'),
     'src/styles/project.css',
     'src/styles/supacharger-account.css',
+    'src/styles/supacharger-agents.css',
     'src/styles/supacharger-auth.css',
     'src/styles/supacharger-organisations.css',
   ];
@@ -385,6 +423,7 @@ test('adds disabled-safe account and organisation options without replacing appl
     'PROFILE_IDENTITY.HEADER_IMAGE',
     'ACCOUNT_SETTINGS',
     'ORGANISATIONS',
+    'AGENT_CONNECTIONS',
     'BILLING.ACCOUNT_SUBJECTS',
   ]);
   await migrateAccountAlignmentConfig(root, { backup: false });
@@ -395,6 +434,7 @@ test('adds disabled-safe account and organisation options without replacing appl
   assert.match(migrated, /AUTOMATIC_TAX: true/);
   assert.match(migrated, /ACCOUNT_SETTINGS:[\s\S]*LANGUAGE: true/);
   assert.match(migrated, /ORGANISATIONS:[\s\S]*ENABLED: false/);
+  assert.match(migrated, /AGENT_CONNECTIONS:[\s\S]*ENABLED: false/);
   assert.match(migrated, /ACCOUNT_SUBJECTS:[\s\S]*ORGANISATION: false/);
   assert.deepEqual(await migrateAccountAlignmentConfig(root, { backup: false }), []);
 });

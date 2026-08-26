@@ -16,6 +16,7 @@ const DEFAULT_MIGRATION_PATHS = [path.join('supabase', 'migrations')];
 const PROJECT_STYLES_FILE = path.join('src', 'styles', 'project.css');
 const AUTH_STYLES_FILE = path.join('src', 'styles', 'supacharger-auth.css');
 const ACCOUNT_STYLES_FILE = path.join('src', 'styles', 'supacharger-account.css');
+const AGENT_STYLES_FILE = path.join('src', 'styles', 'supacharger-agents.css');
 const ORGANISATION_STYLES_FILE = path.join('src', 'styles', 'supacharger-organisations.css');
 const AUTH_SIDECAR_FILE = path.join('src', 'supacharger.adapters', 'auth', 'auth-sidecar.tsx');
 const ACCOUNT_ADAPTER_FILES = [
@@ -39,14 +40,18 @@ const ORGANISATION_ADAPTER_FILES = [
   'profile-fields.tsx',
 ]
   .map((file) => path.join('src', 'supacharger.adapters', 'organisations', file));
+const AGENT_ADAPTER_FILES = ['connection-summary.tsx', 'consent.tsx']
+  .map((file) => path.join('src', 'supacharger.adapters', 'agents', file));
 const DEVELOPER_STARTERS = [
   AUTH_STYLES_FILE,
   ACCOUNT_STYLES_FILE,
+  AGENT_STYLES_FILE,
   ORGANISATION_STYLES_FILE,
   AUTH_SIDECAR_FILE,
   ...ACCOUNT_ADAPTER_FILES,
   ...BILLING_ADAPTER_FILES,
   ...ORGANISATION_ADAPTER_FILES,
+  ...AGENT_ADAPTER_FILES,
 ];
 const LEGACY_AUTH_ROUTE_FILES = [
   path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'layout.tsx'),
@@ -74,6 +79,7 @@ const DEVELOPER_OWNED_FILES = [
   path.join('src', 'assets', 'svgr', 'ui', 'inline-loader.svg'),
   AUTH_STYLES_FILE,
   ACCOUNT_STYLES_FILE,
+  AGENT_STYLES_FILE,
   ORGANISATION_STYLES_FILE,
   AUTH_SIDECAR_FILE,
   PROJECT_STYLES_FILE,
@@ -411,6 +417,62 @@ async function migrateLocalTotpConfig(rootDir, options = {}) {
   return changes.map((key) => `auth.mfa.totp.${key}`);
 }
 
+function agentConnectionsEnabled(source) {
+  const bounds = objectBlockBounds(source, 'AGENT_CONNECTIONS');
+  if (!bounds) return false;
+  return /\bENABLED\s*:\s*true\b/.test(source.slice(bounds.open, bounds.close + 1));
+}
+
+async function migrateLocalAgentConnectionsConfig(rootDir, options = {}) {
+  const configPath = path.join(rootDir, 'supabase', 'config.toml');
+  const applicationConfigPath = path.join(rootDir, 'src', 'supacharger.config.ts');
+  let source;
+  let applicationConfig = '';
+  try {
+    [source, applicationConfig] = await Promise.all([
+      fs.readFile(configPath, 'utf8'),
+      fs.readFile(applicationConfigPath, 'utf8').catch((error) => {
+        if (error?.code === 'ENOENT') return '';
+        throw error;
+      }),
+    ]);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+
+  const enabled = agentConnectionsEnabled(applicationConfig);
+  const bounds = tomlSectionBounds(source, 'auth.oauth_server');
+  const section = bounds ? source.slice(bounds.start, bounds.end) : '';
+  const expected = {
+    enabled: String(enabled),
+    authorization_url_path: '"/auth/oauth/consent"',
+  };
+  const changes = Object.entries(expected)
+    .filter(([key, value]) => !new RegExp(`^${key}\\s*=\\s*${value.replaceAll('/', '\\/')}\\s*$`, 'm').test(section))
+    .map(([key]) => `auth.oauth_server.${key}`);
+  if (changes.length === 0 || options.plan === true) return changes;
+
+  if (options.backup !== false) {
+    await backupConflicts(rootDir, rootDir, ['supabase/config.toml']);
+  }
+  let migrated = source;
+  if (!bounds) {
+    migrated = `${source.replace(/\s*$/, '')}\n\n[auth.oauth_server]\nenabled = ${enabled}\nauthorization_url_path = "/auth/oauth/consent"\nallow_dynamic_registration = false\n`;
+  } else {
+    let migratedSection = section;
+    for (const [key, value] of Object.entries(expected)) {
+      const property = new RegExp(`^${key}\\s*=.*$`, 'm');
+      if (property.test(migratedSection)) migratedSection = migratedSection.replace(property, `${key} = ${value}`);
+      else migratedSection = `${migratedSection.replace(/\s*$/, '')}\n${key} = ${value}\n`;
+    }
+    migrated = `${source.slice(0, bounds.start)}${migratedSection}${source.slice(bounds.end)}`;
+  }
+  await fs.writeFile(configPath, migrated, 'utf8');
+  console.log(`\x1b[34mSynchronised local Supabase OAuth Server with AGENT_CONNECTIONS.ENABLED=${enabled}. Restart the local stack to apply it.\x1b[0m`);
+  return changes;
+}
+
 function objectBlockBounds(source, objectName) {
   const match = new RegExp(`\\b${objectName}\\s*:`).exec(source);
   if (!match) return null;
@@ -487,6 +549,13 @@ async function assessAccountAlignmentConfig(rootDir) {
       missing.push(`ORGANISATIONS.${key}`);
     }
   }
+  if (!objectBlockBounds(source, 'AGENT_CONNECTIONS')) {
+    missing.push('AGENT_CONNECTIONS');
+  } else {
+    for (const key of missingObjectKeys(source, 'AGENT_CONNECTIONS', ['ENABLED'])) {
+      missing.push(`AGENT_CONNECTIONS.${key}`);
+    }
+  }
   if (missingObjectKeys(source, 'BILLING', ['ACCOUNT_SUBJECTS']).length > 0) {
     missing.push('BILLING.ACCOUNT_SUBJECTS');
   }
@@ -534,6 +603,15 @@ async function migrateAccountAlignmentConfig(rootDir, options = {}) {
       ['CHOOSER_PATH', "CHOOSER_PATH: '/account/organisation',"],
       ['ROUTE_MODE', "ROUTE_MODE: 'root-handle',"],
       ['PROFILE_MEDIA', 'PROFILE_MEDIA: true,'],
+    ]);
+  }
+  if (!objectBlockBounds(source, 'AGENT_CONNECTIONS')) {
+    source = insertTopLevelBlock(source, 'BILLING_ACCESS', `AGENT_CONNECTIONS: {
+  ENABLED: false,
+},`);
+  } else {
+    source = insertObjectEntries(source, 'AGENT_CONNECTIONS', [
+      ['ENABLED', 'ENABLED: false,'],
     ]);
   }
   source = insertObjectEntries(source, 'BILLING', [
@@ -1380,6 +1458,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     englishCatalogueAdditions,
     legacyAuthSessionConfigMigration,
     legacyMfaConfigMigration,
+    localAgentConnectionsConfigMigration,
     localTotpConfigMigration,
     rootDocumentConfigMigration,
   ] = await Promise.all([
@@ -1395,6 +1474,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     mergeEnglishCatalogue(rootDir, latestDir, { plan: true }),
     migrateLegacyAuthSessionConfig(rootDir, { plan: true }),
     migrateLegacyMfaConfig(rootDir, { plan: true }),
+    migrateLocalAgentConnectionsConfig(rootDir, { plan: true }),
     migrateLocalTotpConfig(rootDir, { plan: true }),
     migrateRootDocumentConfig(rootDir, { plan: true }),
   ]);
@@ -1420,6 +1500,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     latestManifest,
     legacyAuthSessionConfigMigration,
     legacyMfaConfigMigration,
+    localAgentConnectionsConfigMigration,
     localTotpConfigMigration,
     manualMergeChanges: await changedManualMergePaths(baselineDir, latestDir, latestManifest),
     removals,
@@ -1464,6 +1545,8 @@ async function printPlan(rootDir, installState, options = {}) {
     plan.rootDocumentConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
     console.log(`Local Supabase TOTP changes: ${plan.localTotpConfigMigration.length}`);
     plan.localTotpConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}=true`));
+    console.log(`Local Supabase agent OAuth changes: ${plan.localAgentConnectionsConfigMigration.length}`);
+    plan.localAgentConnectionsConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}`));
     console.log(`Canonical English message additions: ${plan.englishCatalogueAdditions.length}`);
     plan.englishCatalogueAdditions.forEach((key) => console.log(`  MESSAGE ${key}`));
     console.log(`Post-update checks: ${(plan.latestManifest?.postUpdateChecks ?? []).join(', ') || 'none'}`);
@@ -1594,10 +1677,11 @@ Enter Y to continue: \u001b[0m`;
       await removeObsoleteManagedFiles(cwd, baselineManagedFiles, latestManagedFiles, preservedPaths);
       await migrateLegacyAuthSessionConfig(cwd);
       await migrateLegacyMfaConfig(cwd);
+      await migrateAccountAlignmentConfig(cwd);
+      await migrateLocalAgentConnectionsConfig(cwd);
       await migrateLocalTotpConfig(cwd);
       await migrateAuthProviderConfig(cwd);
       await migrateRootDocumentConfig(cwd);
-      await migrateAccountAlignmentConfig(cwd);
       await mergeEnglishCatalogue(cwd, updateDir);
       await migrateLegacyPostcssConfig(cwd);
       await personaliseStarterProjectStyles(cwd);
@@ -1699,10 +1783,11 @@ Enter Y to continue: \u001b[0m`;
 
     await migrateLegacyAuthSessionConfig(cwd);
     await migrateLegacyMfaConfig(cwd);
+    await migrateAccountAlignmentConfig(cwd);
+    await migrateLocalAgentConnectionsConfig(cwd);
     await migrateLocalTotpConfig(cwd);
     await migrateAuthProviderConfig(cwd);
     await migrateRootDocumentConfig(cwd);
-    await migrateAccountAlignmentConfig(cwd);
     await mergeEnglishCatalogue(cwd, updateDir);
     await migrateLegacyPostcssConfig(cwd);
     await personaliseStarterProjectStyles(cwd);
@@ -1737,6 +1822,7 @@ coreupdate.testHelpers = {
   migrateAccountAlignmentConfig,
   migrateLegacyAuthSessionConfig,
   migrateLegacyMfaConfig,
+  migrateLocalAgentConnectionsConfig,
   migrateLocalTotpConfig,
   migrateLegacyConfig,
   migrateLegacyPostcssConfig,

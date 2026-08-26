@@ -25,6 +25,16 @@ const ORGANISATION_ADAPTER_FILES = [
   path.join('src', 'supacharger.adapters', 'organisations', 'profile-extension.ts'),
   path.join('src', 'supacharger.adapters', 'organisations', 'profile-fields.tsx'),
 ];
+const AGENT_ROUTE_FILES = [
+  path.join('src', 'app', '(supacharger)', 'auth', 'oauth', 'consent', 'page.tsx'),
+  path.join('src', 'app', '(supacharger)', '(authenticated)', 'account', 'agents', 'page.tsx'),
+  path.join('src', 'app', '(supacharger)', '(authenticated)', '[handle]', 'settings', 'agents', 'page.tsx'),
+];
+const AGENT_DEVELOPER_FILES = [
+  path.join('src', 'styles', 'supacharger-agents.css'),
+  path.join('src', 'supacharger.adapters', 'agents', 'consent.tsx'),
+  path.join('src', 'supacharger.adapters', 'agents', 'connection-summary.tsx'),
+];
 
 async function exists(filePath) {
   try {
@@ -215,6 +225,24 @@ async function findOrganisationMigration(rootDir) {
   return null;
 }
 
+async function findAgentConnectionsMigration(rootDir) {
+  const migrationsDirectory = path.join(rootDir, 'supabase', 'migrations');
+  let entries;
+  try {
+    entries = await fs.readdir(migrationsDirectory);
+  } catch {
+    return null;
+  }
+  for (const entry of entries.filter((name) => name.endsWith('.sql')).sort().reverse()) {
+    const migrationPath = path.join(migrationsDirectory, entry);
+    const source = await readIfPresent(migrationPath);
+    if (source.includes('app.agent_connections') && source.includes('supacharger_agent')) {
+      return path.relative(rootDir, migrationPath);
+    }
+  }
+  return null;
+}
+
 async function findRpcArgumentMigration(rootDir) {
   const migrationsDirectory = path.join(rootDir, 'supabase', 'migrations');
   let entries;
@@ -284,6 +312,7 @@ async function inspect(rootDir = process.cwd()) {
   ).then((results) => results.some(Boolean));
   const claimsMigration = await findClaimsMigration(rootDir);
   const organisationMigration = await findOrganisationMigration(rootDir);
+  const agentConnectionsMigration = await findAgentConnectionsMigration(rootDir);
   const rpcArgumentMigration = await findRpcArgumentMigration(rootDir);
   const migrationAliases = await inspectMigrationAliases(rootDir);
   const managedManifestSource = await readIfPresent(path.join(rootDir, '.supacharger', 'managed-files.json'));
@@ -294,7 +323,7 @@ async function inspect(rootDir = process.cwd()) {
   const brunoCollectionPath = path.join('docs', 'bruno', 'supacharger-rpc');
   const managedPaths = managedManifest?.managedPaths ?? [];
   const englishCatalogue = parseJson(await readIfPresent(path.join(rootDir, 'messages', 'en.json')));
-  const requiredEnglishNamespaces = ['AccountSettings', 'AccountPreferences', 'AccountSecurity', 'Billing', 'Organisations'];
+  const requiredEnglishNamespaces = ['AccountSettings', 'AccountPreferences', 'AccountSecurity', 'AgentConnections', 'Billing', 'Organisations'];
   const legacyRoutes = (await Promise.all(
     LEGACY_ROUTE_PATHS.map(async (publicPath) => [publicPath, await findRoutePage(rootDir, publicPath)])
   )).filter(([, page]) => Boolean(page));
@@ -304,12 +333,24 @@ async function inspect(rootDir = process.cwd()) {
   const missingOrganisationAdapters = (await Promise.all(
     ORGANISATION_ADAPTER_FILES.map(async (file) => [file, await exists(path.join(rootDir, file))])
   )).filter(([, present]) => !present).map(([file]) => file);
+  const missingAgentRoutes = (await Promise.all(
+    AGENT_ROUTE_FILES.map(async (file) => [file, await exists(path.join(rootDir, file))])
+  )).filter(([, present]) => !present).map(([file]) => file);
+  const missingAgentDeveloperFiles = (await Promise.all(
+    AGENT_DEVELOPER_FILES.map(async (file) => [file, await exists(path.join(rootDir, file))])
+  )).filter(([, present]) => !present).map(([file]) => file);
   const duplicateRoutePages = await findDuplicateRoutePages(rootDir);
 
   const onboardingPolicy = readRecoveryPolicy(applicationConfig, 'POST_SIGN_IN_ONBOARDING');
   const billingPolicy = readRecoveryPolicy(applicationConfig, 'BILLING_ACCESS');
   const mfaTotpPolicy = readObjectBlock(applicationConfig, 'MFA_TOTP');
   const localTotpConfig = readTomlSection(configSource, 'auth.mfa.totp');
+  const agentConnectionsPolicy = readObjectBlock(applicationConfig, 'AGENT_CONNECTIONS');
+  const agentConnectionsEnabled = /\bENABLED\s*:\s*true\b/.test(agentConnectionsPolicy);
+  const localAgentOAuthConfig = readTomlSection(configSource, 'auth.oauth_server');
+  const localAgentOAuthAligned =
+    new RegExp(`^enabled\\s*=\\s*${agentConnectionsEnabled}$`, 'm').test(localAgentOAuthConfig) &&
+    /^authorization_url_path\s*=\s*['"]\/auth\/oauth\/consent['"]$/m.test(localAgentOAuthConfig);
   const [onboardingRoute, billingRoute] = await Promise.all([
     inspectRecoveryRoute(rootDir, onboardingPolicy, ['requireOnboardedUser', 'requireAppAccess']),
     inspectRecoveryRoute(rootDir, billingPolicy, ['requireAppAccess']),
@@ -424,6 +465,17 @@ async function inspect(rootDir = process.cwd()) {
         applicationConfig.includes('PROFILE_MEDIA'),
     },
     {
+      name: 'Agent connections configuration',
+      ok: Boolean(agentConnectionsPolicy) && /\bENABLED\s*:\s*(?:true|false)\b/.test(agentConnectionsPolicy),
+    },
+    {
+      name: 'Local agent OAuth Server configuration',
+      ok: localAgentOAuthAligned,
+      detail: localAgentOAuthAligned
+        ? null
+        : 'keep auth.oauth_server enabled aligned with AGENT_CONNECTIONS.ENABLED and use /auth/oauth/consent',
+    },
+    {
       name: 'Billing account-subject configuration',
       ok:
         applicationConfig.includes('ACCOUNT_SUBJECTS') &&
@@ -439,6 +491,16 @@ async function inspect(rootDir = process.cwd()) {
       name: 'Organisation adapters',
       ok: missingOrganisationAdapters.length === 0,
       detail: missingOrganisationAdapters.join(', ') || null,
+    },
+    {
+      name: 'Canonical agent connection routes',
+      ok: missingAgentRoutes.length === 0,
+      detail: missingAgentRoutes.join(', ') || null,
+    },
+    {
+      name: 'Agent connection presentation adapters',
+      ok: missingAgentDeveloperFiles.length === 0,
+      detail: missingAgentDeveloperFiles.join(', ') || null,
     },
     {
       name: 'Unique App Router pages',
@@ -469,6 +531,7 @@ async function inspect(rootDir = process.cwd()) {
     },
     { name: 'Custom claims migration', ok: Boolean(claimsMigration), detail: claimsMigration },
     { name: 'Organisation foundation migration', ok: Boolean(organisationMigration), detail: organisationMigration },
+    { name: 'Agent connections migration', ok: Boolean(agentConnectionsMigration), detail: agentConnectionsMigration },
     { name: 'Unprefixed exposed-RPC migration', ok: Boolean(rpcArgumentMigration), detail: rpcArgumentMigration },
     { name: 'Forward migration aliases', ok: migrationAliases.ok, detail: migrationAliases.detail },
     {
@@ -504,6 +567,12 @@ async function inspect(rootDir = process.cwd()) {
         postUpdateChecks.includes('test:organisation-ui'),
     },
     {
+      name: 'Managed agent connection contract checks',
+      ok:
+        managedPaths.includes(path.join('test', 'agent-connections-contract.test.mjs')) &&
+        postUpdateChecks.includes('test:agent-connections'),
+    },
+    {
       name: 'Public Supabase environment contract',
       ok:
         envExample.includes('NEXT_PUBLIC_SUPABASE_URL') &&
@@ -527,6 +596,7 @@ async function doctor(rootDir = process.cwd(), options = {}) {
 }
 
 doctor.testHelpers = {
+  findAgentConnectionsMigration,
   findClaimsMigration,
   findOrganisationMigration,
   findRecoveryRoutePage: findRoutePage,
