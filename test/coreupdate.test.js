@@ -147,6 +147,7 @@ test('enables both local Supabase TOTP APIs without changing other MFA providers
 
   const migrated = await fs.readFile(configPath, 'utf8');
   assert.match(migrated, /\[auth\.mfa\.totp\]\nenroll_enabled = true\nverify_enabled = true/);
+  assert.equal((migrated.match(/\[auth\.mfa\.totp\]/g) ?? []).length, 1);
   assert.match(migrated, /\[auth\.mfa\.phone\]\nenroll_enabled = false\nverify_enabled = false/);
 });
 
@@ -172,6 +173,7 @@ test('synchronises local OAuth Server enablement with agent connection policy', 
   const migrated = await fs.readFile(configPath, 'utf8');
   assert.match(migrated, /\[auth\.oauth_server\]\nenabled = true\nauthorization_url_path = "\/auth\/oauth\/consent"/);
   assert.match(migrated, /allow_dynamic_registration = true/);
+  assert.equal((migrated.match(/\[auth\.oauth_server\]/g) ?? []).length, 1);
 });
 
 test('installs a disabled local OAuth Server section when agent policy is absent', async (t) => {

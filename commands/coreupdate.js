@@ -372,7 +372,7 @@ async function migrateLegacyMfaConfig(rootDir, options = {}) {
 }
 
 function tomlSectionBounds(source, sectionName) {
-  const heading = new RegExp(`^\\[${sectionName.replaceAll('.', '\\\\.')}\\]\\s*$`, 'm').exec(source);
+  const heading = new RegExp(`^\\[${sectionName.replaceAll('.', '\\.')}\\]\\s*$`, 'm').exec(source);
   if (!heading) return null;
   const nextHeading = /^\[[^\n]+\]\s*$/gm;
   nextHeading.lastIndex = heading.index + heading[0].length;
