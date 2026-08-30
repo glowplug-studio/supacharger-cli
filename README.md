@@ -29,7 +29,7 @@ supacharger coreupdate --plan --ref <tag-or-commit>
 supacharger coreupdate --ref <tag-or-commit>
 
 # Maintainers may plan from a clean local Core checkout:
-supacharger coreupdate --plan --source ../supacharger
+supacharger coreupdate --plan --source ../SUPACHARGER_APPS/supacharger
 ```
 
 `--plan` clones the installed baseline and latest core into an operating-system temporary directory, then reports writes, obsolete managed removals, dependency changes, migrations, and post-update checks without changing the application or a database.
