@@ -366,7 +366,7 @@ async function migrateLegacyMfaConfig(rootDir, options = {}) {
 }
 
 function tomlSectionBounds(source, sectionName) {
-  const heading = new RegExp(`^\\[${sectionName.replaceAll('.', '\\\\.')}\\]\\s*$`, 'm').exec(source);
+  const heading = new RegExp(`^\\[${sectionName.replaceAll('.', '\\.')}\\]\\s*$`, 'm').exec(source);
   if (!heading) return null;
   const nextHeading = /^\[[^\n]+\]\s*$/gm;
   nextHeading.lastIndex = heading.index + heading[0].length;
@@ -544,6 +544,42 @@ async function migrateAccountAlignmentConfig(rootDir, options = {}) {
   ]);
   await fs.writeFile(configPath, source, 'utf8');
   console.log(`\x1b[34mAdded disabled-safe account alignment configuration defaults: ${missing.join(', ')}.\x1b[0m`);
+  return missing;
+}
+
+async function migrateSessionTransferConfig(rootDir, options = {}) {
+  const configPath = path.join(rootDir, 'src', 'supacharger.config.ts');
+  let source;
+  try {
+    source = await fs.readFile(configPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+
+  const blockName = 'CROSS_DEVICE_SESSION_TRANSFER';
+  const missing = !objectBlockBounds(source, blockName)
+    ? [`AUTHENTICATION.${blockName}`]
+    : missingObjectKeys(source, blockName, ['ENABLED', 'TOKEN_TTL_SECONDS']).map(
+        (key) => `AUTHENTICATION.${blockName}.${key}`,
+      );
+  if (missing.length === 0 || options.plan === true) return missing;
+  if (options.backup !== false) {
+    await backupConflicts(rootDir, rootDir, ['src/supacharger.config.ts']);
+  }
+
+  if (!objectBlockBounds(source, blockName)) {
+    source = insertObjectEntries(source, 'AUTHENTICATION', [
+      [blockName, `${blockName}: {\n  ENABLED: false,\n  TOKEN_TTL_SECONDS: 120,\n},`],
+    ]);
+  } else {
+    source = insertObjectEntries(source, blockName, [
+      ['ENABLED', 'ENABLED: false,'],
+      ['TOKEN_TTL_SECONDS', 'TOKEN_TTL_SECONDS: 120,'],
+    ]);
+  }
+  await fs.writeFile(configPath, source, 'utf8');
+  console.log(`\x1b[34mAdded disabled-safe session-transfer configuration defaults: ${missing.join(', ')}.\x1b[0m`);
   return missing;
 }
 
@@ -894,7 +930,6 @@ async function mergeDependencyContract(rootDir, incomingPackage) {
 function requiredPackageScripts(incomingPackage, postUpdateChecks = []) {
   return Object.fromEntries(
     postUpdateChecks
-      .filter((check) => check !== 'typecheck')
       .map((check) => {
         const command = incomingPackage.scripts?.[check];
         if (typeof command !== 'string' || command.trim() === '') {
@@ -1382,6 +1417,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     legacyMfaConfigMigration,
     localTotpConfigMigration,
     rootDocumentConfigMigration,
+    sessionTransferConfigMigration,
   ] = await Promise.all([
     managedFiles(baselineDir, baselineManifest),
     managedFiles(latestDir, latestManifest),
@@ -1397,6 +1433,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     migrateLegacyMfaConfig(rootDir, { plan: true }),
     migrateLocalTotpConfig(rootDir, { plan: true }),
     migrateRootDocumentConfig(rootDir, { plan: true }),
+    migrateSessionTransferConfig(rootDir, { plan: true }),
   ]);
   const writes = [];
   for (const relPath of latestFiles) {
@@ -1424,6 +1461,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     manualMergeChanges: await changedManualMergePaths(baselineDir, latestDir, latestManifest),
     removals,
     rootDocumentConfigMigration,
+    sessionTransferConfigMigration,
     writes,
   };
 }
@@ -1455,13 +1493,14 @@ async function printPlan(rootDir, installState, options = {}) {
     console.log(`Manual merge-managed changes: ${plan.manualMergeChanges.length}`);
     plan.manualMergeChanges.forEach((file) => console.log(`  MANUAL MERGE ${file}`));
     console.log(
-      `Developer config changes: ${plan.accountAlignmentConfigMigration.length + plan.authProviderConfigMigration.length + plan.legacyAuthSessionConfigMigration.length + plan.legacyMfaConfigMigration.length + plan.rootDocumentConfigMigration.length}`
+      `Developer config changes: ${plan.accountAlignmentConfigMigration.length + plan.authProviderConfigMigration.length + plan.legacyAuthSessionConfigMigration.length + plan.legacyMfaConfigMigration.length + plan.rootDocumentConfigMigration.length + plan.sessionTransferConfigMigration.length}`
     );
     plan.accountAlignmentConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
     plan.authProviderConfigMigration.forEach((provider) => console.log(`  CONFIG AUTH_PROVDERS_ENABLED.${provider}=false`));
     plan.legacyAuthSessionConfigMigration.forEach((key) => console.log(`  CONFIG REMOVE ${key}`));
     plan.legacyMfaConfigMigration.forEach((key) => console.log(`  CONFIG REMOVE ${key}`));
     plan.rootDocumentConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
+    plan.sessionTransferConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
     console.log(`Local Supabase TOTP changes: ${plan.localTotpConfigMigration.length}`);
     plan.localTotpConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}=true`));
     console.log(`Canonical English message additions: ${plan.englishCatalogueAdditions.length}`);
@@ -1598,6 +1637,7 @@ Enter Y to continue: \u001b[0m`;
       await migrateAuthProviderConfig(cwd);
       await migrateRootDocumentConfig(cwd);
       await migrateAccountAlignmentConfig(cwd);
+      await migrateSessionTransferConfig(cwd);
       await mergeEnglishCatalogue(cwd, updateDir);
       await migrateLegacyPostcssConfig(cwd);
       await personaliseStarterProjectStyles(cwd);
@@ -1703,6 +1743,7 @@ Enter Y to continue: \u001b[0m`;
     await migrateAuthProviderConfig(cwd);
     await migrateRootDocumentConfig(cwd);
     await migrateAccountAlignmentConfig(cwd);
+    await migrateSessionTransferConfig(cwd);
     await mergeEnglishCatalogue(cwd, updateDir);
     await migrateLegacyPostcssConfig(cwd);
     await personaliseStarterProjectStyles(cwd);
@@ -1735,6 +1776,7 @@ coreupdate.testHelpers = {
   matchingPreservedPath,
   migrateAuthProviderConfig,
   migrateAccountAlignmentConfig,
+  migrateSessionTransferConfig,
   migrateLegacyAuthSessionConfig,
   migrateLegacyMfaConfig,
   migrateLocalTotpConfig,

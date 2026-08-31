@@ -42,6 +42,7 @@ test('recognises the canonical Supabase authentication contract', async (t) => {
     path.join(root, 'src', 'supacharger.config.ts'),
     `AUTH_SESSION ALLOW_ANONYMOUS_USERS PATH_AUTH_GUARD AUTHENTICATION EMAIL_PASSWORD PASSWORDLESS_EMAIL OTP_LENGTH SIGN_UP_EMAIL_VERIFICATION PROFILE_IDENTITY AVATAR HEADER_IMAGE ACCOUNT_SETTINGS LANGUAGE CANCEL_ACCOUNT PRODUCT_PROFILE_PATH ORGANISATIONS AUTHENTICATION_HANDLE CHOOSER_PATH ROUTE_MODE PROFILE_MEDIA ACCOUNT_SUBJECTS PERSONAL ORGANISATION
 MFA_TOTP: { REQUIRED_FOR_SIGN_IN: false }
+CROSS_DEVICE_SESSION_TRANSFER: { ENABLED: false, TOKEN_TTL_SECONDS: 120 }
 POST_SIGN_IN_ONBOARDING: { REQUIRED: true, REDIRECT_PATH: '/account/setup-profile' }
 BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?full=1' }
 `
@@ -76,6 +77,7 @@ BILLING_ACCESS: { REQUIRED: true, REDIRECT_PATH: '/account/billing/subscribe?ful
       AccountSecurity: { title: 'Security' },
       Billing: { title: 'Billing' },
       Organisations: { title: 'Organisations' },
+      SessionTransfer: { title: 'Opening your session' },
     }),
   );
   await fs.writeFile(

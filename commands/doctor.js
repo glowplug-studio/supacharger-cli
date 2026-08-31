@@ -294,7 +294,7 @@ async function inspect(rootDir = process.cwd()) {
   const brunoCollectionPath = path.join('docs', 'bruno', 'supacharger-rpc');
   const managedPaths = managedManifest?.managedPaths ?? [];
   const englishCatalogue = parseJson(await readIfPresent(path.join(rootDir, 'messages', 'en.json')));
-  const requiredEnglishNamespaces = ['AccountSettings', 'AccountPreferences', 'AccountSecurity', 'Billing', 'Organisations'];
+  const requiredEnglishNamespaces = ['AccountSettings', 'AccountPreferences', 'AccountSecurity', 'Billing', 'Organisations', 'SessionTransfer'];
   const legacyRoutes = (await Promise.all(
     LEGACY_ROUTE_PATHS.map(async (publicPath) => [publicPath, await findRoutePage(rootDir, publicPath)])
   )).filter(([, page]) => Boolean(page));
@@ -309,6 +309,7 @@ async function inspect(rootDir = process.cwd()) {
   const onboardingPolicy = readRecoveryPolicy(applicationConfig, 'POST_SIGN_IN_ONBOARDING');
   const billingPolicy = readRecoveryPolicy(applicationConfig, 'BILLING_ACCESS');
   const mfaTotpPolicy = readObjectBlock(applicationConfig, 'MFA_TOTP');
+  const sessionTransferPolicy = readObjectBlock(applicationConfig, 'CROSS_DEVICE_SESSION_TRANSFER');
   const localTotpConfig = readTomlSection(configSource, 'auth.mfa.totp');
   const [onboardingRoute, billingRoute] = await Promise.all([
     inspectRecoveryRoute(rootDir, onboardingPolicy, ['requireOnboardedUser', 'requireAppAccess']),
@@ -359,6 +360,13 @@ async function inspect(rootDir = process.cwd()) {
       detail: /\bENABLED\s*:/.test(mfaTotpPolicy)
         ? 'remove obsolete AUTHENTICATION.MFA_TOTP.ENABLED; factor management is always available'
         : null,
+    },
+    {
+      name: 'Cross-device session-transfer configuration',
+      ok:
+        /\bENABLED\s*:\s*(?:true|false)\b/.test(sessionTransferPolicy) &&
+        /\bTOKEN_TTL_SECONDS\s*:\s*(?:[6-9]\d|[12]\d\d|300)\b/.test(sessionTransferPolicy),
+      detail: 'set ENABLED to a boolean and TOKEN_TTL_SECONDS to an integer from 60 through 300',
     },
     {
       name: 'Local TOTP MFA APIs',

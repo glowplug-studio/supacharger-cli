@@ -24,6 +24,7 @@ const {
   migrateLegacyProjectStyles,
   migrateLegacyAuthRoutes,
   migrateRootDocumentConfig,
+  migrateSessionTransferConfig,
   moveFiles,
   managedFiles,
   managedFileHashes,
@@ -397,6 +398,25 @@ test('adds disabled-safe account and organisation options without replacing appl
   assert.match(migrated, /ORGANISATIONS:[\s\S]*ENABLED: false/);
   assert.match(migrated, /ACCOUNT_SUBJECTS:[\s\S]*ORGANISATION: false/);
   assert.deepEqual(await migrateAccountAlignmentConfig(root, { backup: false }), []);
+});
+
+test('adds disabled-safe session-transfer configuration without replacing application values', async (t) => {
+  const root = await temporaryDirectory(t);
+  const configPath = path.join(root, 'src', 'supacharger.config.ts');
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, `export const SC_CONFIG = {\n  AUTHENTICATION: {\n    EMAIL_PASSWORD: {},\n  },\n};\n`, 'utf8');
+
+  assert.deepEqual(await migrateSessionTransferConfig(root, { plan: true }), [
+    'AUTHENTICATION.CROSS_DEVICE_SESSION_TRANSFER',
+  ]);
+  await migrateSessionTransferConfig(root, { backup: false });
+  let migrated = await fs.readFile(configPath, 'utf8');
+  assert.match(migrated, /CROSS_DEVICE_SESSION_TRANSFER:[\s\S]*ENABLED: false[\s\S]*TOKEN_TTL_SECONDS: 120/);
+
+  migrated = migrated.replace('ENABLED: false', 'ENABLED: true').replace('TOKEN_TTL_SECONDS: 120', 'TOKEN_TTL_SECONDS: 90');
+  await fs.writeFile(configPath, migrated, 'utf8');
+  assert.deepEqual(await migrateSessionTransferConfig(root, { backup: false }), []);
+  assert.match(await fs.readFile(configPath, 'utf8'), /ENABLED: true[\s\S]*TOKEN_TTL_SECONDS: 90/);
 });
 
 test('preserves the complete developer-owned messages directory', async (t) => {
