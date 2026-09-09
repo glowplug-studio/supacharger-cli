@@ -411,6 +411,45 @@ async function migrateLocalTotpConfig(rootDir, options = {}) {
   return changes.map((key) => `auth.mfa.totp.${key}`);
 }
 
+async function migrateImageFunctionConfig(rootDir, options = {}) {
+  const configPath = path.join(rootDir, 'supabase', 'config.toml');
+  const requiredAsset = './functions/process-image-upload/magick.wasm';
+  let source;
+  try {
+    source = await fs.readFile(configPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+
+  const bounds = tomlSectionBounds(source, 'functions.process-image-upload');
+  const section = bounds ? source.slice(bounds.start, bounds.end) : '';
+  const staticFiles = /^static_files\s*=\s*\[([^\]]*)\]\s*$/m.exec(section);
+  if (section.includes(`"${requiredAsset}"`)) return [];
+  if (options.plan === true) return ['functions.process-image-upload.static_files'];
+
+  if (options.backup !== false) {
+    await backupConflicts(rootDir, rootDir, ['supabase/config.toml']);
+  }
+
+  let migrated;
+  if (!bounds) {
+    migrated = `${source.replace(/\s*$/, '')}\n\n[functions.process-image-upload]\nverify_jwt = true\nstatic_files = ["${requiredAsset}"]\n`;
+  } else if (staticFiles) {
+    const values = staticFiles[1].trim();
+    const replacement = `static_files = [${values}${values ? ', ' : ''}"${requiredAsset}"]`;
+    const migratedSection = section.replace(staticFiles[0], replacement);
+    migrated = `${source.slice(0, bounds.start)}${migratedSection}${source.slice(bounds.end)}`;
+  } else {
+    const migratedSection = `${section.replace(/\s*$/, '')}\nstatic_files = ["${requiredAsset}"]\n`;
+    migrated = `${source.slice(0, bounds.start)}${migratedSection}${source.slice(bounds.end)}`;
+  }
+
+  await fs.writeFile(configPath, migrated, 'utf8');
+  console.log('\x1b[34mBundled the ImageMagick WASM asset for process-image-upload.\x1b[0m');
+  return ['functions.process-image-upload.static_files'];
+}
+
 function objectBlockBounds(source, objectName) {
   const match = new RegExp(`\\b${objectName}\\s*:`).exec(source);
   if (!match) return null;
@@ -1416,6 +1455,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     legacyAuthSessionConfigMigration,
     legacyMfaConfigMigration,
     localTotpConfigMigration,
+    imageFunctionConfigMigration,
     rootDocumentConfigMigration,
     sessionTransferConfigMigration,
   ] = await Promise.all([
@@ -1432,6 +1472,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     migrateLegacyAuthSessionConfig(rootDir, { plan: true }),
     migrateLegacyMfaConfig(rootDir, { plan: true }),
     migrateLocalTotpConfig(rootDir, { plan: true }),
+    migrateImageFunctionConfig(rootDir, { plan: true }),
     migrateRootDocumentConfig(rootDir, { plan: true }),
     migrateSessionTransferConfig(rootDir, { plan: true }),
   ]);
@@ -1458,6 +1499,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     legacyAuthSessionConfigMigration,
     legacyMfaConfigMigration,
     localTotpConfigMigration,
+    imageFunctionConfigMigration,
     manualMergeChanges: await changedManualMergePaths(baselineDir, latestDir, latestManifest),
     removals,
     rootDocumentConfigMigration,
@@ -1503,6 +1545,8 @@ async function printPlan(rootDir, installState, options = {}) {
     plan.sessionTransferConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
     console.log(`Local Supabase TOTP changes: ${plan.localTotpConfigMigration.length}`);
     plan.localTotpConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}=true`));
+    console.log(`Image function bundle changes: ${plan.imageFunctionConfigMigration.length}`);
+    plan.imageFunctionConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}`));
     console.log(`Canonical English message additions: ${plan.englishCatalogueAdditions.length}`);
     plan.englishCatalogueAdditions.forEach((key) => console.log(`  MESSAGE ${key}`));
     console.log(`Post-update checks: ${(plan.latestManifest?.postUpdateChecks ?? []).join(', ') || 'none'}`);
@@ -1634,6 +1678,7 @@ Enter Y to continue: \u001b[0m`;
       await migrateLegacyAuthSessionConfig(cwd);
       await migrateLegacyMfaConfig(cwd);
       await migrateLocalTotpConfig(cwd);
+      await migrateImageFunctionConfig(cwd);
       await migrateAuthProviderConfig(cwd);
       await migrateRootDocumentConfig(cwd);
       await migrateAccountAlignmentConfig(cwd);
@@ -1740,6 +1785,7 @@ Enter Y to continue: \u001b[0m`;
     await migrateLegacyAuthSessionConfig(cwd);
     await migrateLegacyMfaConfig(cwd);
     await migrateLocalTotpConfig(cwd);
+    await migrateImageFunctionConfig(cwd);
     await migrateAuthProviderConfig(cwd);
     await migrateRootDocumentConfig(cwd);
     await migrateAccountAlignmentConfig(cwd);
@@ -1780,6 +1826,7 @@ coreupdate.testHelpers = {
   migrateLegacyAuthSessionConfig,
   migrateLegacyMfaConfig,
   migrateLocalTotpConfig,
+  migrateImageFunctionConfig,
   migrateLegacyConfig,
   migrateLegacyPostcssConfig,
   migrateLegacyProjectStyles,

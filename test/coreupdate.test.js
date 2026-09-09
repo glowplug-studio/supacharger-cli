@@ -19,6 +19,7 @@ const {
   migrateLegacyAuthSessionConfig,
   migrateLegacyMfaConfig,
   migrateLocalTotpConfig,
+  migrateImageFunctionConfig,
   migrateLegacyConfig,
   migrateLegacyPostcssConfig,
   migrateLegacyProjectStyles,
@@ -148,6 +149,30 @@ test('enables both local Supabase TOTP APIs without changing other MFA providers
   const migrated = await fs.readFile(configPath, 'utf8');
   assert.match(migrated, /\[auth\.mfa\.totp\]\nenroll_enabled = true\nverify_enabled = true/);
   assert.match(migrated, /\[auth\.mfa\.phone\]\nenroll_enabled = false\nverify_enabled = false/);
+});
+
+test('merges the ImageMagick static asset into the image function config', async (t) => {
+  const root = await temporaryDirectory(t);
+  const configPath = path.join(root, 'supabase', 'config.toml');
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(
+    configPath,
+    '[functions.process-image-upload]\nverify_jwt = true\nstatic_files = ["./functions/process-image-upload/example.txt"]\n\n[analytics]\nenabled = true\n',
+    'utf8',
+  );
+
+  assert.deepEqual(await migrateImageFunctionConfig(root, { plan: true }), [
+    'functions.process-image-upload.static_files',
+  ]);
+  await migrateImageFunctionConfig(root, { backup: false });
+
+  const migrated = await fs.readFile(configPath, 'utf8');
+  assert.match(
+    migrated,
+    /static_files = \["\.\/functions\/process-image-upload\/example\.txt", "\.\/functions\/process-image-upload\/magick\.wasm"\]/,
+  );
+  assert.match(migrated, /\[analytics\]\nenabled = true/);
+  assert.deepEqual(await migrateImageFunctionConfig(root, { plan: true }), []);
 });
 
 test('migrates a legacy developer stylesheet to the project style seam', async (t) => {
