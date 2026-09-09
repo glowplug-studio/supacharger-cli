@@ -2,6 +2,14 @@
 
 Developer CLI for installing and safely updating Supacharger applications.
 
+## Local extensions
+
+Run `supacharger extension install brevo-email --source /path/to/supacharger/extensions/brevo-email --plan` in an application, review, then repeat without `--plan`. `supacharger extension doctor brevo-email` checks installed hashes. Read the installed `docs/extensions/brevo-email/INSTALL.md` for static project-owned integration; installation does not activate delivery.
+
+The installer is maintained in Core at `tools/supacharger-extensions/installer.cjs` and shipped byte-identically in `commands/extensions/installer.cjs`. It accepts manifest-v1/v2 local bundles and Core ownership-v2 applications. V2 adds `supabase/functions/ext-<id>/` and explicitly marked namespaced forward migrations. Installed migration bytes cannot change; timestamp collisions stop installation. Core paths, symlinks, traversal, local edits and same-version changes are refused. Recovery files remain under `.supacharger/extension-transactions/`; the Core lock is untouched. Dependency/config edits, applying migrations, deployment and automatic removal remain explicit manual steps. Brevo 2.0.0 supplies reliable delivery infrastructure so apps pass authorised props rather than build their own retry worker.
+
+The unsafe submodule/`install.js` installer and enable/disable stubs are retired. These changes are local and not yet published to npm. Token-gated downloads and commercial purchases will be managed through Specdrive later; no token command exists yet.
+
 `supacharger init [target]` installs the starter, including starter `next-intl` configuration and message catalogues. After installation, each application owns `src/i18n/config.ts`, `src/i18n/request.ts`, and the complete `messages/` directory.
 
 `supacharger coreupdate` checks protected core files against the installed baseline, but excludes localisation paths from integrity conflicts. It preserves locale configuration and every secondary catalogue. For `messages/en.json`, it adds missing canonical keys and fills empty English values while retaining every existing non-empty application value, so new managed routes cannot fail because an older project lacks their source copy.
