@@ -55,3 +55,5 @@ The social-auth provider migration expands `AUTH_PROVDERS_ENABLED` from Google/F
 The root-document migration similarly reports missing `METADATA`, `ROOT_PROVIDERS`, and `ANALYTICS` blocks. A real update backs up the developer configuration and inserts only missing blocks. It derives the title template from the existing application title, enables favicon declarations only when `public/favicon.ico` and the standard `public/favicons/` files exist, and leaves Google Analytics disabled until `NEXT_PUBLIC_GOOGLE_ANALYTICS_ID` is configured.
 
 Read the documentation at http://supacharger.dev/docs/cli/
+
+Core upgrades install the no-op `src/supacharger.adapters/request-guard.ts` only when absent, preserving project availability checks on later updates.

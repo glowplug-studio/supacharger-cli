@@ -40,6 +40,7 @@ const ORGANISATION_ADAPTER_FILES = [
 ]
   .map((file) => path.join('src', 'supacharger.adapters', 'organisations', file));
 const DEVELOPER_STARTERS = [
+  path.join('src', 'supacharger.adapters', 'request-guard.ts'),
   AUTH_STYLES_FILE,
   ACCOUNT_STYLES_FILE,
   ORGANISATION_STYLES_FILE,

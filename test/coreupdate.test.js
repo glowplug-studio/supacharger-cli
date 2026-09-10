@@ -996,3 +996,17 @@ test('treats local Supabase config as automatically merge-managed', async (t) =>
 
   assert.deepEqual(await changedManualMergePaths(baseline, latest, manifest), []);
 });
+
+
+test('request guard starter installs on upgrade and preserves an existing project guard', async (t) => {
+  const root = await temporaryDirectory(t);
+  const update = await temporaryDirectory(t);
+  const file = path.join('src', 'supacharger.adapters', 'request-guard.ts');
+  await fs.mkdir(path.dirname(path.join(update, file)), { recursive: true });
+  await fs.writeFile(path.join(update, file), 'no-op guard\n');
+  await installMissingDeveloperStarters(update, root);
+  assert.equal(await fs.readFile(path.join(root, file), 'utf8'), 'no-op guard\n');
+  await fs.writeFile(path.join(root, file), 'project guard\n');
+  await installMissingDeveloperStarters(update, root);
+  assert.equal(await fs.readFile(path.join(root, file), 'utf8'), 'project guard\n');
+});
