@@ -4,7 +4,7 @@ Apply the workspace-level Supacharger source-of-truth and synchronisation rules 
 
 Generated or upgraded PostgreSQL functions and PostgREST RPCs must not prefix exposed argument names with `p_`. CLI templates and upgrade logic must preserve forward-only migrations and keep generated callers, database types, OpenAPI descriptions, and Bruno requests aligned with descriptive unprefixed argument names.
 
-Keep exact managed contract tests limited to reusable Supacharger behaviour. Preserve `test/project-billing-schema-contract.test.mjs` as a developer-owned consumer seam, and preserve consumer package scripts that add the project test alongside the shared managed test.
+Do not distribute or require Core contract tests in consuming applications. Keep CLI unit tests inside this repository and outside the published npm package.
 
 Preserve locale configuration and every secondary-language catalogue during updates. The only catalogue merge permitted by default is adding a missing canonical English key or filling an empty English source value from Core; never replace existing non-empty product wording or invent secondary translations.
 
@@ -14,12 +14,11 @@ Treat `.supacharger/migration-aliases.json` as a developer-owned audit record fo
 
 ## Bruno RPC maintenance
 
-- Treat `docs/bruno/supacharger-rpc/` and `scripts/check-bruno-rpc-parity.mjs` as exact CLI-managed Core assets. Keep them byte-identical to the installed Core lock in every managed consumer.
+- Treat `docs/bruno/supacharger-rpc/` as exact CLI-managed Core documentation. Keep it byte-identical to the installed Core lock in every managed consumer.
 - Add, update, rename, or remove the matching canonical Bruno request in the same change as every reusable client-callable `api` RPC contract change. Keep method, URL, schema headers, authentication, arguments, body, example, response expectations, status behaviour, and embedded documentation aligned.
-- Run `npm run check:bruno-rpcs` before reporting an RPC or Core-alignment task complete. The Core check requires documentation for every current Core `api` RPC. In a consumer it requires every canonical Supacharger RPC while allowing additional product-owned RPCs.
 - Keep consumer-specific RPC requests in the owning application's developer-managed Bruno collection and verification command. Do not add them to `docs/bruno/supacharger-rpc/` unless the RPC is first approved and implemented as a reusable Core contract.
 - Never commit access tokens, service-role keys, secret keys, or customer data to a Bruno request or environment.
-- The CLI must install the shared checker, collection, and missing required package script, run the declared parity check, and refuse to advance `.supacharger/core-lock.json` when parity fails.
+- The CLI installs the shared collection as documentation and does not add or run a parity checker.
 
 <!-- END:shared-bruno-rpc-guidance -->
 
@@ -36,7 +35,7 @@ Treat `.supacharger/migration-aliases.json` as a developer-owned audit record fo
 - Do not force mismatched width and height values that distort the source aspect ratio. Do not fix clipping by adding arbitrary `width` or `height` props to the React component.
 - Use `fill='currentColor'` or `stroke='currentColor'` only when the artwork is intended to inherit the surrounding text colour.
 - Before changing an SVG component's sizing classes, inspect the rendered `<svg>` and confirm that SVGR/SVGO preserved its `viewBox`. For sizing such as `h-8 w-auto`, verify that the complete artwork stays inside the rendered bounds at every intended viewport size.
-- Add a regression test asserting that responsive SVG assets retain their `viewBox` and omit root-level intrinsic dimensions. Visually verify SVG changes in the browser on every affected page.
+- Visually verify that responsive SVG assets retain their `viewBox`, omit root-level intrinsic dimensions, and render completely at every affected size.
 
 A responsive source SVG root should look like:
 

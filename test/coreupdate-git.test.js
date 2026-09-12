@@ -60,9 +60,9 @@ for (const drift of [false, true]) {
     await fs.writeFile(path.join(source, '.supacharger/managed-files.json'), JSON.stringify({
       version: 2, managedPaths: ['.supacharger/managed-files.json', 'src/supacharger'],
       mergeManagedPaths: ['package.json'], forwardOnlyMigrationPaths: [],
-      developerOwnedPaths: [loader], postUpdateChecks: ['verify'],
+      developerOwnedPaths: [loader],
     }));
-    await fs.writeFile(path.join(source, 'package.json'), JSON.stringify({ name: 'cli-fixture', scripts: { verify: 'node check.cjs' } }));
+    await fs.writeFile(path.join(source, 'package.json'), JSON.stringify({ name: 'cli-fixture' }));
     await fs.writeFile(path.join(source, loader), 'canonical artwork');
     await fs.writeFile(path.join(source, 'src/supacharger.config.ts'), 'export const SC_CONFIG = {\n  MARKETING_SITE_URL: null,\n  PROFILE_IDENTITY: {\n    USERNAME: \'optional\',\n  },\n  POST_SIGN_IN_ONBOARDING: {\n    REQUIRED: false,\n  },\n  BILLING_ACCESS: {\n    REQUIRED: false,\n  },\n  BILLING: {\n    AUTOMATIC_TAX: false,\n  },\n  AUTHENTICATION: {\n  },\n  AUTH_PROVDERS_ENABLED: {\n    google: false,\n  },\n};\n');
     const managed = path.join(source, 'src/supacharger/version.txt');
@@ -71,7 +71,6 @@ for (const drift of [false, true]) {
     const baseline = git('rev-parse', 'HEAD');
     await fs.cp(source, project, { recursive: true, filter: (entry) => !entry.split(path.sep).includes('.git') });
     await fs.writeFile(path.join(project, '.supacharger/core-lock.json'), JSON.stringify({ repository: 'glowplug-studio/supacharger', commit: baseline }));
-    await fs.writeFile(path.join(project, 'check.cjs'), "const fs = require('node:fs'); require('node:assert/strict').equal(fs.readFileSync('src/supacharger/version.txt', 'utf8'), 'requested'); fs.writeFileSync('checks-passed.txt', 'yes');");
     if (drift) {
       await fs.writeFile(path.join(project, 'src/supacharger/version.txt'), 'local drift');
       await fs.writeFile(path.join(project, loader), 'custom artwork');
@@ -118,7 +117,6 @@ process.stdout.write(result.stdout || ''); process.stderr.write(result.stderr ||
     assert.equal(git('rev-parse', 'refs/heads/main'), later);
     assert.equal(JSON.parse(await fs.readFile(path.join(project, '.supacharger/core-lock.json'), 'utf8')).commit, requested);
     assert.equal(await fs.readFile(path.join(project, 'src/supacharger/version.txt'), 'utf8'), 'requested');
-    assert.equal(await fs.readFile(path.join(project, 'checks-passed.txt'), 'utf8'), 'yes');
     assert.equal(await fs.readFile(path.join(project, loader), 'utf8'), drift ? 'custom artwork' : 'canonical artwork');
     if (drift) {
       const backups = await fs.readdir(path.join(project, '.supacharger/backups'));

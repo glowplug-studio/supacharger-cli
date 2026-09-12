@@ -10,7 +10,7 @@ const {
   assessPostUpdateWork,
   buildUpdatePlan,
   changedManualMergePaths,
-  changedOwnershipTransitionPathsFromHashes,
+  changedOwnershipTransitionPathsFromContents,
   detectPackageManager,
   installMissingDeveloperStarters,
   matchingPreservedPath,
@@ -29,12 +29,11 @@ const {
   migrateSessionTransferConfig,
   moveFiles,
   managedFiles,
-  managedFileHashes,
+  managedFileContents,
   personaliseStarterProjectStyles,
   readInstallState,
   readManagedManifest,
   removeObsoleteManagedFiles,
-  runPostUpdateChecks,
   runPostUpdateSteps,
   verifyManagedFiles,
   writeCoreLock,
@@ -719,37 +718,6 @@ test('accepts the table migration ledger emitted by Supabase CLI versions that i
   assert.equal(completed, true);
 });
 
-test('installs missing required Core scripts without overwriting consumer scripts', async (t) => {
-  const root = await temporaryDirectory(t);
-  const update = await temporaryDirectory(t);
-  const currentPackage = {
-    name: 'consumer',
-    scripts: { 'test:billing-schema': 'node test/shared.mjs && node test/project.mjs' },
-    dependencies: {},
-  };
-  const incomingPackage = {
-    name: 'supacharger',
-    scripts: {
-      'test:billing-schema': 'node test/shared.mjs',
-      'check:bruno-rpcs': 'node scripts/check-bruno-rpc-parity.mjs',
-    },
-    dependencies: {},
-  };
-
-  await fs.writeFile(path.join(root, 'package.json'), `${JSON.stringify(currentPackage)}\n`);
-  await fs.writeFile(path.join(update, 'package.json'), `${JSON.stringify(incomingPackage)}\n`);
-
-  const assessment = await assessPostUpdateWork(root, update, {
-    postUpdateChecks: ['check:bruno-rpcs'],
-  });
-  assert.deepEqual(assessment.missingRequiredScripts, ['check:bruno-rpcs']);
-
-  await runPostUpdateSteps(root, assessment);
-  const mergedPackage = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
-  assert.equal(mergedPackage.scripts['check:bruno-rpcs'], 'node scripts/check-bruno-rpc-parity.mjs');
-  assert.equal(mergedPackage.scripts['test:billing-schema'], 'node test/shared.mjs && node test/project.mjs');
-});
-
 test('fails completion when the linked migration ledger omits an updated migration', async (t) => {
   const root = await temporaryDirectory(t);
   const update = await temporaryDirectory(t);
@@ -808,9 +776,9 @@ test('considers only migrations added after the installed core baseline', async 
   await fs.writeFile(path.join(update, added), 'select 2;\n');
 
   const allMigrations = await assessPostUpdateWork(root, update);
-  const existingHash = allMigrations.changedMigrations.find(({ path: migration }) => migration === existing).hash;
+  assert.ok(allMigrations.changedMigrations.some(({ path: migration }) => migration === existing));
   const assessment = await assessPostUpdateWork(root, update, {
-    baselineMigrationHashes: new Map([[existing, existingHash]]),
+    baselineMigrationContents: new Map([[existing, Buffer.from('select 1;\n')]]),
   });
 
   assert.deepEqual(assessment.changedMigrations.map(({ path: migration }) => migration), [added]);
@@ -828,7 +796,7 @@ test('rejects mutation of a migration published in the installed baseline', asyn
   await fs.writeFile(path.join(update, migration), 'select 2;\n');
 
   await assert.rejects(
-    assessPostUpdateWork(root, update, { baselineMigrationHashes: new Map([[migration, 'different-hash']]) }),
+    assessPostUpdateWork(root, update, { baselineMigrationContents: new Map([[migration, Buffer.from('select 1;\n')]]) }),
     /Published migration changed after installation/,
   );
 });
@@ -913,7 +881,6 @@ test('plans managed writes and obsolete removals without changing the project', 
     version: 1,
     managedPaths: ['.supacharger/managed-files.json', 'package.json', 'src/supacharger'],
     developerOwnedPaths: [],
-    postUpdateChecks: ['lint'],
   };
 
   for (const directory of [root, baseline, latest]) {
@@ -940,7 +907,7 @@ test('plans managed writes and obsolete removals without changing the project', 
   assert.equal(await fs.readFile(path.join(root, 'src', 'supacharger', 'changed.ts'), 'utf8'), 'old\n');
 });
 
-test('removes only obsolete managed files and requires every declared check', async (t) => {
+test('removes only obsolete managed files', async (t) => {
   const root = await temporaryDirectory(t);
   const obsolete = path.join('src', 'supacharger', 'obsolete.ts');
   const preserved = path.join('src', 'supacharger.adapters', 'project.ts');
@@ -948,8 +915,6 @@ test('removes only obsolete managed files and requires every declared check', as
   await fs.mkdir(path.dirname(path.join(root, preserved)), { recursive: true });
   await fs.writeFile(path.join(root, obsolete), 'old\n');
   await fs.writeFile(path.join(root, preserved), 'project\n');
-  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ scripts: { lint: 'eslint .' } }));
-
   assert.deepEqual(
     await removeObsoleteManagedFiles(root, [obsolete, preserved], [], ['src/supacharger.adapters']),
     [obsolete],
@@ -957,18 +922,6 @@ test('removes only obsolete managed files and requires every declared check', as
   await assert.rejects(fs.access(path.join(root, obsolete)));
   assert.equal(await fs.readFile(path.join(root, preserved), 'utf8'), 'project\n');
 
-  const commands = [];
-  await runPostUpdateChecks(root, { postUpdateChecks: ['lint', 'typecheck'] }, {
-    run: async (command) => commands.push(command),
-  });
-  assert.deepEqual(commands, [
-    'npm run lint -- --ignore-pattern .supacharger/backups',
-    'npx tsc --noEmit',
-  ]);
-  await assert.rejects(
-    runPostUpdateChecks(root, { postUpdateChecks: ['missing'] }, { run: async () => {} }),
-    /Required post-update check is unavailable/,
-  );
 });
 
 test('detects manual merge-managed changes and refuses a false exact-file verification', async (t) => {
@@ -982,8 +935,8 @@ test('detects manual merge-managed changes and refuses a false exact-file verifi
   await fs.writeFile(path.join(root, relativePath), 'consumer\n');
 
   assert.deepEqual(await changedManualMergePaths(baseline, latest, manifest), [relativePath]);
-  const expectedHashes = await managedFileHashes(latest, [relativePath]);
-  await assert.rejects(verifyManagedFiles(root, expectedHashes), /Managed files do not match/);
+  const expectedContents = await managedFileContents(latest, [relativePath]);
+  await assert.rejects(verifyManagedFiles(root, expectedContents), /Managed files do not match/);
 });
 
 test('stops a merge-managed file becoming exact when the project customised it', async (t) => {
@@ -993,26 +946,26 @@ test('stops a merge-managed file becoming exact when the project customised it',
   const relativePath = 'tailwind.config.ts';
   await fs.writeFile(path.join(baseline, relativePath), 'baseline Core\n');
   await fs.writeFile(path.join(latest, relativePath), 'latest Core\n');
-  const baselineHashes = new Map([
-    [relativePath, (await managedFileHashes(baseline, [relativePath])).get(relativePath)],
+  const baselineContents = new Map([
+    [relativePath, (await managedFileContents(baseline, [relativePath])).get(relativePath)],
   ]);
   const latestManifest = { managedPaths: [relativePath] };
 
   await fs.writeFile(path.join(root, relativePath), 'project customisation\n');
   assert.deepEqual(
-    await changedOwnershipTransitionPathsFromHashes(root, baselineHashes, latest, latestManifest),
+    await changedOwnershipTransitionPathsFromContents(root, baselineContents, latest, latestManifest),
     [relativePath],
   );
 
   await fs.writeFile(path.join(root, relativePath), 'baseline Core\n');
   assert.deepEqual(
-    await changedOwnershipTransitionPathsFromHashes(root, baselineHashes, latest, latestManifest),
+    await changedOwnershipTransitionPathsFromContents(root, baselineContents, latest, latestManifest),
     [],
   );
 
   await fs.writeFile(path.join(root, relativePath), 'latest Core\n');
   assert.deepEqual(
-    await changedOwnershipTransitionPathsFromHashes(root, baselineHashes, latest, latestManifest),
+    await changedOwnershipTransitionPathsFromContents(root, baselineContents, latest, latestManifest),
     [],
   );
 });

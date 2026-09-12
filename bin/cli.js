@@ -33,15 +33,17 @@ coredev.command('update')
 program
   .command('coreupdate')
   .description('Update from an immutable Supacharger Core ref and check for local conflicts')
-  .option('--plan', 'Show managed writes, removals, dependencies, migrations, and checks without changing the project')
+  .option('--plan', 'Show managed writes, removals, dependencies and migrations without changing the project')
   .option('--ref <tag-or-commit>', 'Core tag, branch, or commit to install', 'main')
   .option('--source <path>', 'Maintainer-only local Core checkout source')
   .action((options) => coreupdateCommand(options));
 
 program
   .command('doctor')
-  .description('Check Supabase Proxy, Auth Hook, claims migration, environment, and dependency alignment')
-  .action(() => doctorCommand());
+  .description('Compare local managed files and configuration with installed and incoming Core')
+  .option('--ref <tag-or-commit>', 'Core tag, branch, or commit to inspect', 'main')
+  .option('--source <path>', 'Maintainer-only local Core checkout source')
+  .action((options) => doctorCommand(options));
 
 program
   .command('init [target]')

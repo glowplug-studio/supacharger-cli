@@ -1,7 +1,6 @@
 const { exec } = require('child_process');
 const fs = require('fs/promises');
 const path = require('path');
-const crypto = require('crypto');
 const readline = require('readline');
 const os = require('os');
 const { isDeepStrictEqual } = require('node:util');
@@ -903,11 +902,28 @@ async function removeGitDir(dir) {
   }
 }
 
-async function hashFile(filePath) {
-  const hash = crypto.createHash('sha256');
-  const data = await fs.readFile(filePath);
-  hash.update(data);
-  return hash.digest('hex');
+async function filesEqual(firstPath, secondPath) {
+  try {
+    const [first, second] = await Promise.all([fs.readFile(firstPath), fs.readFile(secondPath)]);
+    return first.equals(second);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function contentsEqual(first, second) {
+  if (first === null || second === null) return first === second;
+  return first.equals(second);
+}
+
+async function readFileContents(filePath) {
+  try {
+    return await fs.readFile(filePath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
 }
 
 async function readJson(filePath) {
@@ -992,53 +1008,17 @@ async function mergeDependencyContract(rootDir, incomingPackage) {
   }
 }
 
-function requiredPackageScripts(incomingPackage, postUpdateChecks = []) {
-  return Object.fromEntries(
-    postUpdateChecks
-      .map((check) => {
-        const command = incomingPackage.scripts?.[check];
-        if (typeof command !== 'string' || command.trim() === '') {
-          throw new Error(`Core package.json does not define required post-update script: ${check}`);
-        }
-        return [check, command];
-      })
-  );
-}
-
-async function mergeRequiredPackageScripts(rootDir, requiredScripts) {
-  const packagePath = path.join(rootDir, 'package.json');
-  const currentPackage = await readJson(packagePath);
-  const scripts = { ...(currentPackage.scripts ?? {}) };
-  let changed = false;
-
-  for (const [name, command] of Object.entries(requiredScripts)) {
-    if (typeof scripts[name] === 'string' && scripts[name].trim() !== '') continue;
-    scripts[name] = command;
-    changed = true;
-  }
-
-  if (changed) {
-    await fs.writeFile(
-      packagePath,
-      `${JSON.stringify({ ...currentPackage, scripts }, null, 2)}\n`,
-      'utf8'
-    );
-  }
-}
-
 async function installForwardOnlyMigrations(rootDir, assessment) {
   for (const migration of assessment.changedMigrations) {
     const sourcePath = path.join(assessment.incomingRoot, migration.path);
     const destinationPath = path.join(rootDir, migration.path);
 
-    try {
-      const existingHash = await hashFile(destinationPath);
-      if (existingHash === migration.hash) continue;
+    const existingContents = await readFileContents(destinationPath);
+    if (existingContents !== null) {
+      if (existingContents.equals(await fs.readFile(sourcePath))) continue;
       throw new Error(
         `Forward-only migration collision at ${migration.path}. The existing migration was preserved; resolve the history manually.`,
       );
-    } catch (error) {
-      if (error?.code !== 'ENOENT') throw error;
     }
 
     await fs.mkdir(path.dirname(destinationPath), { recursive: true });
@@ -1046,13 +1026,13 @@ async function installForwardOnlyMigrations(rootDir, assessment) {
   }
 }
 
-async function migrationHashes(rootDir, migrationPaths = DEFAULT_MIGRATION_PATHS) {
+async function migrationContents(rootDir, migrationPaths = DEFAULT_MIGRATION_PATHS) {
   const files = await walkFiles(rootDir);
   const migrations = files.filter(
     (file) => pathMatchesManifest(file, migrationPaths) && file.endsWith('.sql'),
   );
   return new Map(
-    await Promise.all(migrations.map(async (migration) => [migration, await hashFile(path.join(rootDir, migration))])),
+    await Promise.all(migrations.map(async (migration) => [migration, await fs.readFile(path.join(rootDir, migration))])),
   );
 }
 
@@ -1089,9 +1069,9 @@ async function assessPostUpdateWork(rootDir, updateDir, options = {}) {
   const satisfiedMigrationAliases = [];
 
   for (const migration of incomingMigrations) {
-    const incomingHash = await hashFile(path.join(updateDir, migration));
-    if (options.baselineMigrationHashes?.has(migration)) {
-      if (options.baselineMigrationHashes.get(migration) !== incomingHash) {
+    const incomingContents = await fs.readFile(path.join(updateDir, migration));
+    if (options.baselineMigrationContents?.has(migration)) {
+      if (!options.baselineMigrationContents.get(migration).equals(incomingContents)) {
         throw new Error(`Published migration changed after installation: ${migration}`);
       }
       continue;
@@ -1108,17 +1088,12 @@ async function assessPostUpdateWork(rootDir, updateDir, options = {}) {
       }
     }
     try {
-      const currentHash = await hashFile(path.join(rootDir, migration));
-      if (currentHash !== incomingHash) changedMigrations.push({ path: migration, hash: incomingHash });
+      const currentContents = await fs.readFile(path.join(rootDir, migration));
+      if (!currentContents.equals(incomingContents)) changedMigrations.push({ path: migration });
     } catch {
-      changedMigrations.push({ path: migration, hash: incomingHash });
+      changedMigrations.push({ path: migration });
     }
   }
-
-  const requiredScripts = requiredPackageScripts(incomingPackage, options.postUpdateChecks);
-  const missingRequiredScripts = Object.keys(requiredScripts).filter(
-    (name) => typeof currentPackage.scripts?.[name] !== 'string' || currentPackage.scripts[name].trim() === ''
-  );
 
   return {
     dependencyChanged: dependencyContractChanged(currentPackage, incomingPackage),
@@ -1127,79 +1102,64 @@ async function assessPostUpdateWork(rootDir, updateDir, options = {}) {
     incomingFiles,
     changedMigrations,
     satisfiedMigrationAliases,
-    requiredScripts,
-    missingRequiredScripts,
   };
 }
 
-async function mergeManagedHashes(rootDir, manifest) {
+async function mergeManagedContents(rootDir, manifest) {
   const mergePaths = (manifest?.mergeManagedPaths ?? []).filter(
     (mergePath) => !AUTOMATIC_MERGE_PATHS.has(mergePath)
   );
-  const hashes = new Map();
+  const contents = new Map();
   for (const mergePath of mergePaths) {
-    try {
-      hashes.set(mergePath, await hashFile(path.join(rootDir, mergePath)));
-    } catch (error) {
-      if (error?.code === 'ENOENT') hashes.set(mergePath, null);
-      else throw error;
-    }
+    contents.set(mergePath, await readFileContents(path.join(rootDir, mergePath)));
   }
-  return hashes;
+  return contents;
 }
 
 async function changedManualMergePaths(baselineDir, latestDir, manifest) {
-  const baselineHashes = await mergeManagedHashes(baselineDir, manifest);
-  return changedManualMergePathsFromHashes(baselineHashes, latestDir, manifest);
+  const baselineContents = await mergeManagedContents(baselineDir, manifest);
+  return changedManualMergePathsFromContents(baselineContents, latestDir, manifest);
 }
 
-async function changedManualMergePathsFromHashes(baselineHashes, latestDir, manifest) {
-  const latestHashes = await mergeManagedHashes(latestDir, manifest);
+async function changedManualMergePathsFromContents(baselineContents, latestDir, manifest) {
+  const latestContents = await mergeManagedContents(latestDir, manifest);
   const changed = [];
-  for (const [mergePath, latestHash] of latestHashes) {
-    if (!baselineHashes.has(mergePath) || baselineHashes.get(mergePath) !== latestHash) changed.push(mergePath);
+  for (const [mergePath, latestContent] of latestContents) {
+    if (!baselineContents.has(mergePath) || !contentsEqual(baselineContents.get(mergePath), latestContent)) changed.push(mergePath);
   }
   return changed;
 }
 
-async function changedOwnershipTransitionPathsFromHashes(rootDir, baselineMergeHashes, latestDir, latestManifest) {
-  const transitionedPaths = [...baselineMergeHashes.keys()].filter((relPath) =>
+async function changedOwnershipTransitionPathsFromContents(rootDir, baselineMergeContents, latestDir, latestManifest) {
+  const transitionedPaths = [...baselineMergeContents.keys()].filter((relPath) =>
     pathMatchesManifest(relPath, latestManifest?.managedPaths ?? [])
   );
   const changed = [];
   for (const relPath of transitionedPaths) {
-    let localHash;
-    try {
-      localHash = await hashFile(path.join(rootDir, relPath));
-    } catch (error) {
-      if (error?.code === 'ENOENT') continue;
-      throw error;
-    }
-    const [baselineHash, latestHash] = await Promise.all([
-      Promise.resolve(baselineMergeHashes.get(relPath)),
-      hashFile(path.join(latestDir, relPath)),
+    const [localContent, latestContent] = await Promise.all([
+      readFileContents(path.join(rootDir, relPath)),
+      readFileContents(path.join(latestDir, relPath)),
     ]);
-    if (localHash !== baselineHash && localHash !== latestHash) changed.push(relPath);
+    if (localContent === null) continue;
+    const baselineContent = baselineMergeContents.get(relPath);
+    if (!contentsEqual(localContent, baselineContent) && !contentsEqual(localContent, latestContent)) changed.push(relPath);
   }
   return changed;
 }
 
-async function managedFileHashes(rootDir, managedFilePaths) {
+async function managedFileContents(rootDir, managedFilePaths) {
   return new Map(
     await Promise.all(
-      managedFilePaths.map(async (relPath) => [relPath, await hashFile(path.join(rootDir, relPath))])
+      managedFilePaths.map(async (relPath) => [relPath, await fs.readFile(path.join(rootDir, relPath))])
     )
   );
 }
 
-async function verifyManagedFiles(rootDir, expectedHashes) {
+async function verifyManagedFiles(rootDir, expectedContents) {
   const mismatches = [];
-  for (const [relPath, expectedHash] of expectedHashes) {
-    try {
-      if ((await hashFile(path.join(rootDir, relPath))) !== expectedHash) mismatches.push(relPath);
-    } catch {
-      mismatches.push(relPath);
-    }
+  for (const [relPath, expectedContent] of expectedContents) {
+    const actualContent = await readFileContents(path.join(rootDir, relPath));
+    if (!contentsEqual(actualContent, expectedContent)) mismatches.push(relPath);
   }
   if (mismatches.length > 0) {
     throw new Error(`Managed files do not match the target Core: ${mismatches.join(', ')}`);
@@ -1211,13 +1171,8 @@ async function verifyPostUpdateFiles(rootDir, assessment) {
   if (dependencyContractChanged(currentPackage, assessment.incomingPackage)) {
     throw new Error('The incoming dependency contract was not merged into package.json.');
   }
-  for (const name of Object.keys(assessment.requiredScripts ?? {})) {
-    if (typeof currentPackage.scripts?.[name] !== 'string' || currentPackage.scripts[name].trim() === '') {
-      throw new Error(`Required post-update package script was not installed: ${name}`);
-    }
-  }
   for (const migration of assessment.changedMigrations) {
-    if ((await hashFile(path.join(rootDir, migration.path))) !== migration.hash) {
+    if (!await filesEqual(path.join(rootDir, migration.path), path.join(assessment.incomingRoot, migration.path))) {
       throw new Error(`Required migration was not installed: ${migration.path}`);
     }
   }
@@ -1227,7 +1182,6 @@ async function runPostUpdateSteps(rootDir, assessment, options = {}) {
   const run = options.run ?? execCommand;
   const confirm = options.confirm ?? askYesNo;
   await mergeDependencyContract(rootDir, assessment.incomingPackage);
-  await mergeRequiredPackageScripts(rootDir, assessment.requiredScripts ?? {});
   await installForwardOnlyMigrations(rootDir, assessment);
   await verifyPostUpdateFiles(rootDir, assessment);
 
@@ -1269,26 +1223,6 @@ async function runPostUpdateSteps(rootDir, assessment, options = {}) {
     }
   }
   return true;
-}
-
-async function runPostUpdateChecks(rootDir, manifest, options = {}) {
-  const run = options.run ?? execCommand;
-  const packageJson = await readJson(path.join(rootDir, 'package.json'));
-  const scripts = packageJson.scripts ?? {};
-  const requestedChecks = manifest?.postUpdateChecks ?? [];
-  const packageManager = detectPackageManager(packageJson, await walkFiles(rootDir));
-
-  for (const check of requestedChecks) {
-    if (check === 'typecheck') {
-      await run('npx tsc --noEmit', { cwd: rootDir });
-    } else if (check === 'lint' && scripts[check]) {
-      await run(`${packageManager} run ${check} -- --ignore-pattern .supacharger/backups`, { cwd: rootDir });
-    } else if (scripts[check]) {
-      await run(`${packageManager} run ${check}`, { cwd: rootDir });
-    } else {
-      throw new Error(`Required post-update check is unavailable: ${check}`);
-    }
-  }
 }
 
 async function walkFiles(baseDir, currentDir = '') {
@@ -1465,7 +1399,7 @@ async function migrateLegacyAuthRoutes(rootDir, baselineDir) {
       throw error;
     }
     try {
-      if ((await hashFile(localPath)) !== (await hashFile(baselinePath))) {
+      if (!await filesEqual(localPath, baselinePath)) {
         throw new Error(
           `${relPath} contains application changes. Move them into the auth sidecar adapter before updating the core.`,
         );
@@ -1489,7 +1423,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     readManagedManifest(baselineDir),
     readManagedManifest(latestDir),
   ]);
-  const baselineMigrationHashes = await migrationHashes(
+  const baselineMigrationContents = await migrationContents(
     baselineDir,
     baselineManifest?.forwardOnlyMigrationPaths ?? DEFAULT_MIGRATION_PATHS
   );
@@ -1511,9 +1445,8 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     managedFiles(baselineDir, baselineManifest),
     managedFiles(latestDir, latestManifest),
     assessPostUpdateWork(rootDir, latestDir, {
-      baselineMigrationHashes,
+      baselineMigrationContents,
       forwardOnlyMigrationPaths: latestManifest?.forwardOnlyMigrationPaths,
-      postUpdateChecks: latestManifest?.postUpdateChecks,
     }),
     migrateAccountAlignmentConfig(rootDir, { plan: true }),
     migrateAuthProviderConfig(rootDir, { plan: true }),
@@ -1529,7 +1462,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
   const writes = [];
   for (const relPath of latestFiles) {
     try {
-      if ((await hashFile(path.join(rootDir, relPath))) !== (await hashFile(path.join(latestDir, relPath)))) writes.push(relPath);
+      if (!await filesEqual(path.join(rootDir, relPath), path.join(latestDir, relPath))) writes.push(relPath);
     } catch {
       writes.push(relPath);
     }
@@ -1538,7 +1471,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
   const removals = baselineFiles.filter(
     (file) => !latestSet.has(file) && !matchingPreservedPath(file, latestManifest?.developerOwnedPaths ?? DEVELOPER_OWNED_PATHS)
   );
-  const baselineMergeHashes = await mergeManagedHashes(baselineDir, baselineManifest);
+  const baselineMergeContents = await mergeManagedContents(baselineDir, baselineManifest);
   return {
     assessment,
     accountAlignmentConfigMigration,
@@ -1552,9 +1485,9 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     localTotpConfigMigration,
     imageFunctionConfigMigration,
     manualMergeChanges: await changedManualMergePaths(baselineDir, latestDir, latestManifest),
-    ownershipTransitionChanges: await changedOwnershipTransitionPathsFromHashes(
+    ownershipTransitionChanges: await changedOwnershipTransitionPathsFromContents(
       rootDir,
-      baselineMergeHashes,
+      baselineMergeContents,
       latestDir,
       latestManifest,
     ),
@@ -1582,8 +1515,6 @@ async function printPlan(rootDir, installState, options = {}) {
     console.log(`Obsolete managed removals: ${plan.removals.length}`);
     plan.removals.forEach((file) => console.log(`  REMOVE ${file}`));
     console.log(`Dependency contract changed: ${plan.assessment.dependencyChanged ? 'yes' : 'no'}`);
-    console.log(`Missing required package scripts: ${plan.assessment.missingRequiredScripts.length}`);
-    plan.assessment.missingRequiredScripts.forEach((script) => console.log(`  SCRIPT ${script}`));
     console.log(`Changed migrations: ${plan.assessment.changedMigrations.length}`);
     plan.assessment.changedMigrations.forEach(({ path: migration }) => console.log(`  MIGRATION ${migration}`));
     console.log(`Satisfied migration aliases: ${plan.assessment.satisfiedMigrationAliases.length}`);
@@ -1610,7 +1541,6 @@ async function printPlan(rootDir, installState, options = {}) {
     plan.imageFunctionConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}`));
     console.log(`Canonical English message additions: ${plan.englishCatalogueAdditions.length}`);
     plan.englishCatalogueAdditions.forEach((key) => console.log(`  MESSAGE ${key}`));
-    console.log(`Post-update checks: ${(plan.latestManifest?.postUpdateChecks ?? []).join(', ') || 'none'}`);
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
@@ -1658,31 +1588,31 @@ Enter Y to continue: \u001b[0m`;
     await migrateLegacyConfig(cwd);
     await migrateLegacyProjectStyles(cwd);
 
-    const localHash = installState.commit;
-    console.log(`\x1b[34mCurrent core commit:\x1b[0m \x1b[32m${localHash}\x1b[0m`);
+    const installedCommit = installState.commit;
+    console.log(`\x1b[34mCurrent core commit:\x1b[0m \x1b[32m${installedCommit}\x1b[0m`);
 
-    let remoteHash = options.source
+    let targetCommit = options.source
       ? (await execCommand('git rev-parse HEAD', { cwd: path.resolve(options.source) })).stdout.trim()
       : await getRemoteRefHash(installState.repository, options.ref);
-    console.log(`\x1b[34mRequested Core commit hash:\x1b[0m \x1b[32m${remoteHash}\x1b[0m`);
+    console.log(`\x1b[34mRequested Core commit:\x1b[0m \x1b[32m${targetCommit}\x1b[0m`);
 
     await fs.rm(updateDir, { recursive: true, force: true });
     await fs.mkdir(updateDir, { recursive: true });
     console.log(`\x1b[34mCreated or cleaned directory:\x1b[0m \x1b[32m${updateDir}\x1b[0m`);
 
-    await cloneAndCheckout(updateDir, localHash, installState.repository, options.source);
+    await cloneAndCheckout(updateDir, installedCommit, installState.repository, options.source);
 
     console.log('\x1b[34m\nChecking Core Integrity...\x1b[0m');
 
     const baselineManifest = await readManagedManifest(updateDir);
     const updateFiles = await managedFiles(updateDir, baselineManifest);
     const baselineManagedFiles = [...updateFiles];
-    const baselineMigrationHashes = await migrationHashes(
+    const baselineMigrationContents = await migrationContents(
       updateDir,
       baselineManifest?.forwardOnlyMigrationPaths ?? DEFAULT_MIGRATION_PATHS,
     );
-    const baselineMergeHashes = await managedFileHashes(updateDir, await walkFiles(updateDir));
-    const baselineOwnershipTransitionHashes = await mergeManagedHashes(updateDir, baselineManifest);
+    const baselineMergeContents = await managedFileContents(updateDir, await walkFiles(updateDir));
+    const baselineOwnershipTransitionContents = await mergeManagedContents(updateDir, baselineManifest);
 
     const missingFiles = [];
     const differentFiles = [];
@@ -1700,12 +1630,7 @@ Enter Y to continue: \u001b[0m`;
         continue;
       }
 
-      const [hashUpdate, hashLocal] = await Promise.all([
-        hashFile(updateFilePath),
-        hashFile(localFilePath),
-      ]);
-
-      if (hashUpdate !== hashLocal) {
+      if (!await filesEqual(updateFilePath, localFilePath)) {
         differentFiles.push(relPath);
       }
     }
@@ -1714,11 +1639,11 @@ Enter Y to continue: \u001b[0m`;
       console.log('\x1b[32m✓ Local files match the installed core baseline.\x1b[0m');
       await migrateLegacyAuthRoutes(cwd, updateDir);
       await removeDirContents(updateDir);
-      remoteHash = await cloneLatestSource(updateDir, { ref: options.source ? options.ref : remoteHash, repository: installState.repository, source: options.source });
+      targetCommit = await cloneLatestSource(updateDir, { ref: options.source ? options.ref : targetCommit, repository: installState.repository, source: options.source });
       const latestManifest = await readManagedManifest(updateDir);
       const latestManagedFiles = await managedFiles(updateDir, latestManifest);
-      const manualMergeChanges = await changedManualMergePathsFromHashes(
-        baselineMergeHashes,
+      const manualMergeChanges = await changedManualMergePathsFromContents(
+        baselineMergeContents,
         updateDir,
         latestManifest,
       );
@@ -1727,9 +1652,9 @@ Enter Y to continue: \u001b[0m`;
           `Core changed merge-managed files that require an explicit merge strategy: ${manualMergeChanges.join(', ')}`,
         );
       }
-      const ownershipTransitionChanges = await changedOwnershipTransitionPathsFromHashes(
+      const ownershipTransitionChanges = await changedOwnershipTransitionPathsFromContents(
         cwd,
-        baselineOwnershipTransitionHashes,
+        baselineOwnershipTransitionContents,
         updateDir,
         latestManifest,
       );
@@ -1739,11 +1664,10 @@ Enter Y to continue: \u001b[0m`;
         );
       }
       const assessment = await assessPostUpdateWork(cwd, updateDir, {
-        baselineMigrationHashes,
+        baselineMigrationContents,
         forwardOnlyMigrationPaths: latestManifest?.forwardOnlyMigrationPaths,
-        postUpdateChecks: latestManifest?.postUpdateChecks,
       });
-      const latestManagedHashes = await managedFileHashes(updateDir, latestManagedFiles);
+      const latestManagedContents = await managedFileContents(updateDir, latestManagedFiles);
       const preservedPaths = latestManifest?.developerOwnedPaths ?? DEVELOPER_OWNED_PATHS;
       const targetsToBackup = [...latestManagedFiles, ...baselineManagedFiles.filter((file) => !latestManagedFiles.includes(file))];
       await backupConflicts(cwd, cwd, targetsToBackup);
@@ -1768,9 +1692,8 @@ Enter Y to continue: \u001b[0m`;
         return;
       }
       await fs.rm(updateDir, { recursive: true, force: true });
-      await runPostUpdateChecks(cwd, latestManifest);
-      await verifyManagedFiles(cwd, latestManagedHashes);
-      await writeCoreLock(cwd, remoteHash);
+      await verifyManagedFiles(cwd, latestManagedContents);
+      await writeCoreLock(cwd, targetCommit);
       await fs.rm(updateDir, { recursive: true, force: true });
       console.log('\x1b[32mUpdate complete and .sc-core-update folder removed.\x1b[0m');
       return;
@@ -1806,16 +1729,16 @@ Enter Y to continue: \u001b[0m`;
     await migrateLegacyAuthRoutes(cwd, updateDir);
     await fs.rm(updateDir, { recursive: true, force: true });
     await fs.mkdir(updateDir, { recursive: true });
-    remoteHash = await cloneLatestSource(updateDir, {
-      ref: options.source ? options.ref : remoteHash,
+    targetCommit = await cloneLatestSource(updateDir, {
+      ref: options.source ? options.ref : targetCommit,
       repository: installState.repository,
       source: options.source,
     });
     const latestManifest = await readManagedManifest(updateDir);
     const latestManagedFiles = await managedFiles(updateDir, latestManifest);
     const preservedPaths = latestManifest?.developerOwnedPaths ?? DEVELOPER_OWNED_PATHS;
-    const manualMergeChanges = await changedManualMergePathsFromHashes(
-      baselineMergeHashes,
+    const manualMergeChanges = await changedManualMergePathsFromContents(
+      baselineMergeContents,
       updateDir,
       latestManifest,
     );
@@ -1824,9 +1747,9 @@ Enter Y to continue: \u001b[0m`;
         `Core changed merge-managed files that require an explicit merge strategy: ${manualMergeChanges.join(', ')}`,
       );
     }
-    const ownershipTransitionChanges = await changedOwnershipTransitionPathsFromHashes(
+    const ownershipTransitionChanges = await changedOwnershipTransitionPathsFromContents(
       cwd,
-      baselineOwnershipTransitionHashes,
+      baselineOwnershipTransitionContents,
       updateDir,
       latestManifest,
     );
@@ -1836,11 +1759,10 @@ Enter Y to continue: \u001b[0m`;
       );
     }
     const assessment = await assessPostUpdateWork(cwd, updateDir, {
-      baselineMigrationHashes,
+      baselineMigrationContents,
       forwardOnlyMigrationPaths: latestManifest?.forwardOnlyMigrationPaths,
-      postUpdateChecks: latestManifest?.postUpdateChecks,
     });
-    const latestManagedHashes = await managedFileHashes(updateDir, latestManagedFiles);
+    const latestManagedContents = await managedFileContents(updateDir, latestManagedFiles);
 
     if (action === 'OB') {
       // Backup conflicting files first
@@ -1887,9 +1809,8 @@ Enter Y to continue: \u001b[0m`;
       return;
     }
     await fs.rm(updateDir, { recursive: true, force: true });
-    await runPostUpdateChecks(cwd, latestManifest);
-    await verifyManagedFiles(cwd, latestManagedHashes);
-    await writeCoreLock(cwd, remoteHash);
+    await verifyManagedFiles(cwd, latestManagedContents);
+    await writeCoreLock(cwd, targetCommit);
 
     await fs.rm(updateDir, { recursive: true, force: true });
 
@@ -1907,7 +1828,7 @@ coreupdate.testHelpers = {
   dependencyContractChanged,
   detectPackageManager,
   changedManualMergePaths,
-  changedOwnershipTransitionPathsFromHashes,
+  changedOwnershipTransitionPathsFromContents,
   matchingPreservedPath,
   migrateAuthProviderConfig,
   migrateAccountAlignmentConfig,
@@ -1926,20 +1847,20 @@ coreupdate.testHelpers = {
   installMissingDeveloperStarters,
   moveFiles,
   mergeDependencyContract,
-  mergeRequiredPackageScripts,
   managedFiles,
-  managedFileHashes,
+  managedFileContents,
   readManagedManifest,
   removeObsoleteManagedFiles,
   personaliseStarterProjectStyles,
   readInstallState,
   readMigrationAliases,
   runPostUpdateSteps,
-  runPostUpdateChecks,
-  requiredPackageScripts,
   verifyManagedFiles,
   verifyPostUpdateFiles,
   writeCoreLock,
+  cloneAndCheckout,
+  cloneLatestSource,
+  filesEqual,
 };
 
 module.exports = coreupdate;
