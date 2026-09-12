@@ -14,6 +14,7 @@ const MIGRATION_ALIASES_FILE = path.join('.supacharger', 'migration-aliases.json
 const AUTOMATIC_MERGE_PATHS = new Set(['package.json', 'package-lock.json', 'supabase/config.toml']);
 const DEFAULT_MIGRATION_PATHS = [path.join('supabase', 'migrations')];
 const PROJECT_STYLES_FILE = path.join('src', 'styles', 'project.css');
+const PROJECT_TAILWIND_CONFIG_FILE = 'tailwind.project.config.ts';
 const AUTH_STYLES_FILE = path.join('src', 'styles', 'supacharger-auth.css');
 const ACCOUNT_STYLES_FILE = path.join('src', 'styles', 'supacharger-account.css');
 const ORGANISATION_STYLES_FILE = path.join('src', 'styles', 'supacharger-organisations.css');
@@ -42,6 +43,7 @@ const ORGANISATION_ADAPTER_FILES = [
 const IMAGE_LOADER_FILE = path.join('src', 'assets', 'svgr', 'ui', 'image-loader.svg');
 const DEVELOPER_STARTERS = [
   IMAGE_LOADER_FILE,
+  PROJECT_TAILWIND_CONFIG_FILE,
   path.join('src', 'supacharger.adapters', 'request-guard.ts'),
   AUTH_STYLES_FILE,
   ACCOUNT_STYLES_FILE,
@@ -70,6 +72,7 @@ const LEGACY_POSTCSS_CONFIG = `module.exports = {
 };`;
 const DEVELOPER_OWNED_FILES = [
   IMAGE_LOADER_FILE,
+  PROJECT_TAILWIND_CONFIG_FILE,
   'src/supacharger.config.ts',
   path.join('src', 'app', 'layout.tsx'),
   path.join('src', 'i18n', 'config.ts'),
@@ -1154,6 +1157,28 @@ async function changedManualMergePathsFromHashes(baselineHashes, latestDir, mani
   return changed;
 }
 
+async function changedOwnershipTransitionPathsFromHashes(rootDir, baselineMergeHashes, latestDir, latestManifest) {
+  const transitionedPaths = [...baselineMergeHashes.keys()].filter((relPath) =>
+    pathMatchesManifest(relPath, latestManifest?.managedPaths ?? [])
+  );
+  const changed = [];
+  for (const relPath of transitionedPaths) {
+    let localHash;
+    try {
+      localHash = await hashFile(path.join(rootDir, relPath));
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    const [baselineHash, latestHash] = await Promise.all([
+      Promise.resolve(baselineMergeHashes.get(relPath)),
+      hashFile(path.join(latestDir, relPath)),
+    ]);
+    if (localHash !== baselineHash && localHash !== latestHash) changed.push(relPath);
+  }
+  return changed;
+}
+
 async function managedFileHashes(rootDir, managedFilePaths) {
   return new Map(
     await Promise.all(
@@ -1508,6 +1533,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
   const removals = baselineFiles.filter(
     (file) => !latestSet.has(file) && !matchingPreservedPath(file, latestManifest?.developerOwnedPaths ?? DEVELOPER_OWNED_PATHS)
   );
+  const baselineMergeHashes = await mergeManagedHashes(baselineDir, baselineManifest);
   return {
     assessment,
     accountAlignmentConfigMigration,
@@ -1521,6 +1547,12 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     localTotpConfigMigration,
     imageFunctionConfigMigration,
     manualMergeChanges: await changedManualMergePaths(baselineDir, latestDir, latestManifest),
+    ownershipTransitionChanges: await changedOwnershipTransitionPathsFromHashes(
+      rootDir,
+      baselineMergeHashes,
+      latestDir,
+      latestManifest,
+    ),
     removals,
     rootDocumentConfigMigration,
     sessionTransferConfigMigration,
@@ -1555,6 +1587,8 @@ async function printPlan(rootDir, installState, options = {}) {
     );
     console.log(`Manual merge-managed changes: ${plan.manualMergeChanges.length}`);
     plan.manualMergeChanges.forEach((file) => console.log(`  MANUAL MERGE ${file}`));
+    console.log(`Manual ownership migrations: ${plan.ownershipTransitionChanges.length}`);
+    plan.ownershipTransitionChanges.forEach((file) => console.log(`  MOVE PROJECT CONFIG ${file}`));
     console.log(
       `Developer config changes: ${plan.accountAlignmentConfigMigration.length + plan.authProviderConfigMigration.length + plan.legacyAuthSessionConfigMigration.length + plan.legacyMfaConfigMigration.length + plan.rootDocumentConfigMigration.length + plan.sessionTransferConfigMigration.length + plan.signUpTermsConfigMigration.length}`
     );
@@ -1641,6 +1675,7 @@ Enter Y to continue: \u001b[0m`;
       baselineManifest?.forwardOnlyMigrationPaths ?? DEFAULT_MIGRATION_PATHS,
     );
     const baselineMergeHashes = await managedFileHashes(updateDir, await walkFiles(updateDir));
+    const baselineOwnershipTransitionHashes = await mergeManagedHashes(updateDir, baselineManifest);
 
     const missingFiles = [];
     const differentFiles = [];
@@ -1683,6 +1718,17 @@ Enter Y to continue: \u001b[0m`;
       if (manualMergeChanges.length > 0) {
         throw new Error(
           `Core changed merge-managed files that require an explicit merge strategy: ${manualMergeChanges.join(', ')}`,
+        );
+      }
+      const ownershipTransitionChanges = await changedOwnershipTransitionPathsFromHashes(
+        cwd,
+        baselineOwnershipTransitionHashes,
+        updateDir,
+        latestManifest,
+      );
+      if (ownershipTransitionChanges.length > 0) {
+        throw new Error(
+          `Former merge-managed files contain project changes that must move to a developer-owned extension before Core can replace them: ${ownershipTransitionChanges.join(', ')}`,
         );
       }
       const assessment = await assessPostUpdateWork(cwd, updateDir, {
@@ -1771,6 +1817,17 @@ Enter Y to continue: \u001b[0m`;
         `Core changed merge-managed files that require an explicit merge strategy: ${manualMergeChanges.join(', ')}`,
       );
     }
+    const ownershipTransitionChanges = await changedOwnershipTransitionPathsFromHashes(
+      cwd,
+      baselineOwnershipTransitionHashes,
+      updateDir,
+      latestManifest,
+    );
+    if (ownershipTransitionChanges.length > 0) {
+      throw new Error(
+        `Former merge-managed files contain project changes that must move to a developer-owned extension before Core can replace them: ${ownershipTransitionChanges.join(', ')}`,
+      );
+    }
     const assessment = await assessPostUpdateWork(cwd, updateDir, {
       baselineMigrationHashes,
       forwardOnlyMigrationPaths: latestManifest?.forwardOnlyMigrationPaths,
@@ -1843,6 +1900,7 @@ coreupdate.testHelpers = {
   dependencyContractChanged,
   detectPackageManager,
   changedManualMergePaths,
+  changedOwnershipTransitionPathsFromHashes,
   matchingPreservedPath,
   migrateAuthProviderConfig,
   migrateAccountAlignmentConfig,

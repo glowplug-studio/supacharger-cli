@@ -10,6 +10,7 @@ const {
   assessPostUpdateWork,
   buildUpdatePlan,
   changedManualMergePaths,
+  changedOwnershipTransitionPathsFromHashes,
   detectPackageManager,
   installMissingDeveloperStarters,
   matchingPreservedPath,
@@ -974,7 +975,7 @@ test('detects manual merge-managed changes and refuses a false exact-file verifi
   const root = await temporaryDirectory(t);
   const baseline = await temporaryDirectory(t);
   const latest = await temporaryDirectory(t);
-  const relativePath = 'tailwind.config.ts';
+  const relativePath = 'project-tool.config.ts';
   const manifest = { mergeManagedPaths: [relativePath] };
   await fs.writeFile(path.join(baseline, relativePath), 'baseline\n');
   await fs.writeFile(path.join(latest, relativePath), 'latest\n');
@@ -983,6 +984,37 @@ test('detects manual merge-managed changes and refuses a false exact-file verifi
   assert.deepEqual(await changedManualMergePaths(baseline, latest, manifest), [relativePath]);
   const expectedHashes = await managedFileHashes(latest, [relativePath]);
   await assert.rejects(verifyManagedFiles(root, expectedHashes), /Managed files do not match/);
+});
+
+test('stops a merge-managed file becoming exact when the project customised it', async (t) => {
+  const root = await temporaryDirectory(t);
+  const baseline = await temporaryDirectory(t);
+  const latest = await temporaryDirectory(t);
+  const relativePath = 'tailwind.config.ts';
+  await fs.writeFile(path.join(baseline, relativePath), 'baseline Core\n');
+  await fs.writeFile(path.join(latest, relativePath), 'latest Core\n');
+  const baselineHashes = new Map([
+    [relativePath, (await managedFileHashes(baseline, [relativePath])).get(relativePath)],
+  ]);
+  const latestManifest = { managedPaths: [relativePath] };
+
+  await fs.writeFile(path.join(root, relativePath), 'project customisation\n');
+  assert.deepEqual(
+    await changedOwnershipTransitionPathsFromHashes(root, baselineHashes, latest, latestManifest),
+    [relativePath],
+  );
+
+  await fs.writeFile(path.join(root, relativePath), 'baseline Core\n');
+  assert.deepEqual(
+    await changedOwnershipTransitionPathsFromHashes(root, baselineHashes, latest, latestManifest),
+    [],
+  );
+
+  await fs.writeFile(path.join(root, relativePath), 'latest Core\n');
+  assert.deepEqual(
+    await changedOwnershipTransitionPathsFromHashes(root, baselineHashes, latest, latestManifest),
+    [],
+  );
 });
 
 test('treats local Supabase config as automatically merge-managed', async (t) => {

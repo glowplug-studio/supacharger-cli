@@ -13,6 +13,7 @@ async function temporaryDirectory(t) {
 }
 
 const loader = 'src/assets/svgr/ui/image-loader.svg';
+const projectTailwindConfig = 'tailwind.project.config.ts';
 test('image loader is installed once and customised artwork survives upgrades', async (t) => {
   const root = await temporaryDirectory(t);
   const incoming = path.join(root, 'incoming');
@@ -24,6 +25,21 @@ test('image loader is installed once and customised artwork survives upgrades', 
   await fs.writeFile(path.join(project, loader), 'custom artwork');
   assert.deepEqual(await installMissingDeveloperStarters(incoming, project), []);
   assert.equal(await fs.readFile(path.join(project, loader), 'utf8'), 'custom artwork');
+});
+
+test('blank project Tailwind configuration is installed once and then preserved', async (t) => {
+  const root = await temporaryDirectory(t);
+  const incoming = path.join(root, 'incoming');
+  const project = path.join(root, 'project');
+  await fs.mkdir(incoming);
+  await fs.writeFile(path.join(incoming, projectTailwindConfig), 'module.exports = {};\n');
+  assert.deepEqual(await installMissingDeveloperStarters(incoming, project), [projectTailwindConfig]);
+  await fs.writeFile(path.join(project, projectTailwindConfig), 'module.exports = { plugins: [plugin] };\n');
+  assert.deepEqual(await installMissingDeveloperStarters(incoming, project), []);
+  assert.equal(
+    await fs.readFile(path.join(project, projectTailwindConfig), 'utf8'),
+    'module.exports = { plugins: [plugin] };\n',
+  );
 });
 
 for (const drift of [false, true]) {
