@@ -65,3 +65,9 @@ Set `AUTHENTICATION.SIGN_UP_TERMS_URL` in developer-owned `src/supacharger.confi
 The shared login/signup form displays the notice beneath signup actions and on the provider chooser, where a social action can create an account even from sign-in. Wording follows the configured password, passwordless and social signup methods. `AuthJourney.signUpTerms`, `signUpTermsSocial`, `signUpTermsSocialOnly`, `signUpTermsPasswordless` and `signUpTermsPasswordlessSocial` are complete rich-text messages; preserve the `<terms>...</terms>` link tag when translating. English values are supplied; secondary catalogues remain pending translation.
 
 This is a displayed notice, not a required checkbox or stored consent record. `ACCOUNT_REQUIRED_TERMS_AGREEMENT_PATH` remains separate. CLI upgrades add the missing setting as `null` and preserve an existing URL. Existing consumers receive the same property without changing their authentication methods. Configure the application's real terms URL before expecting a visible notice.
+
+## Git update identity and image loader
+
+A Git update resolves the requested ref once and fetches that commit, even if the branch moves while conflicts are reviewed. Both update paths record the checked-out commit only after the declared checks and managed-file hash verification succeed. Use an explicit commit SHA for a separately reviewed plan and update to target the same release.
+
+The updater installs `src/assets/svgr/ui/image-loader.svg` only when absent and preserves existing artwork, including during legacy updates without a manifest. These CLI changes must be published before they are available through npm.

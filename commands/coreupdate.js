@@ -39,7 +39,9 @@ const ORGANISATION_ADAPTER_FILES = [
   'profile-fields.tsx',
 ]
   .map((file) => path.join('src', 'supacharger.adapters', 'organisations', file));
+const IMAGE_LOADER_FILE = path.join('src', 'assets', 'svgr', 'ui', 'image-loader.svg');
 const DEVELOPER_STARTERS = [
+  IMAGE_LOADER_FILE,
   path.join('src', 'supacharger.adapters', 'request-guard.ts'),
   AUTH_STYLES_FILE,
   ACCOUNT_STYLES_FILE,
@@ -67,6 +69,7 @@ const LEGACY_POSTCSS_CONFIG = `module.exports = {
   },
 };`;
 const DEVELOPER_OWNED_FILES = [
+  IMAGE_LOADER_FILE,
   'src/supacharger.config.ts',
   path.join('src', 'app', 'layout.tsx'),
   path.join('src', 'i18n', 'config.ts'),
@@ -1669,7 +1672,7 @@ Enter Y to continue: \u001b[0m`;
       console.log('\x1b[32m✓ Local files match the installed core baseline.\x1b[0m');
       await migrateLegacyAuthRoutes(cwd, updateDir);
       await removeDirContents(updateDir);
-      remoteHash = await cloneLatestSource(updateDir, { ref: options.ref, repository: installState.repository, source: options.source });
+      remoteHash = await cloneLatestSource(updateDir, { ref: options.source ? options.ref : remoteHash, repository: installState.repository, source: options.source });
       const latestManifest = await readManagedManifest(updateDir);
       const latestManagedFiles = await managedFiles(updateDir, latestManifest);
       const manualMergeChanges = await changedManualMergePathsFromHashes(
@@ -1750,8 +1753,8 @@ Enter Y to continue: \u001b[0m`;
     await migrateLegacyAuthRoutes(cwd, updateDir);
     await fs.rm(updateDir, { recursive: true, force: true });
     await fs.mkdir(updateDir, { recursive: true });
-    await cloneLatestSource(updateDir, {
-      ref: options.ref,
+    remoteHash = await cloneLatestSource(updateDir, {
+      ref: options.source ? options.ref : remoteHash,
       repository: installState.repository,
       source: options.source,
     });
