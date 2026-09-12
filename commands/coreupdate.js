@@ -6,6 +6,8 @@ const readline = require('readline');
 const os = require('os');
 const { isDeepStrictEqual } = require('node:util');
 
+const { printGitHubDevelopmentWarning } = require('./common/github-development-warning');
+
 const CORE_REPOSITORY = 'glowplug-studio/supacharger';
 const CORE_SSH_URL = `git@github.com:${CORE_REPOSITORY}.git`;
 const CORE_LOCK_FILE = path.join('.supacharger', 'core-lock.json');
@@ -42,6 +44,9 @@ const ORGANISATION_ADAPTER_FILES = [
   .map((file) => path.join('src', 'supacharger.adapters', 'organisations', file));
 const IMAGE_LOADER_FILE = path.join('src', 'assets', 'svgr', 'ui', 'image-loader.svg');
 const DEVELOPER_STARTERS = [
+  'AGENTS.md',
+  '.agents/project/AGENTS.md',
+  'CHANGELOG.project.md',
   IMAGE_LOADER_FILE,
   PROJECT_TAILWIND_CONFIG_FILE,
   path.join('src', 'supacharger.adapters', 'request-guard.ts'),
@@ -1625,6 +1630,8 @@ async function coreupdate(options = {}) {
       console.error('\x1b[31mError: Supacharger installation metadata is missing. Aborting.\x1b[0m');
       process.exit(1);
     }
+
+    if (!options.source) printGitHubDevelopmentWarning();
 
     if (options.plan === true) {
       await printPlan(cwd, installState, options);

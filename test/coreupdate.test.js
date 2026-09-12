@@ -1062,3 +1062,20 @@ test('signup terms migration previews, defaults to null and preserves custom URL
   assert.deepEqual(await migrate(root, { backup: false }), []);
   assert.equal(await fs.readFile(file, 'utf8'), customised);
 });
+
+test('agent and application changelog starters preserve developer instructions on update', async (t) => {
+  const root = await temporaryDirectory(t);
+  const update = await temporaryDirectory(t);
+  for (const file of ['AGENTS.md', '.agents/project/AGENTS.md', 'CHANGELOG.project.md']) {
+    await fs.mkdir(path.dirname(path.join(update, file)), { recursive: true });
+    await fs.writeFile(path.join(update, file), file === '.agents/project/AGENTS.md' ? '' : 'Starter\n');
+  }
+  await fs.writeFile(path.join(root, 'AGENTS.md'), 'Existing project rules\n');
+  await installMissingDeveloperStarters(update, root);
+  assert.equal(await fs.readFile(path.join(root, 'AGENTS.md'), 'utf8'), 'Existing project rules\n');
+  assert.equal(await fs.readFile(path.join(root, '.agents/project/AGENTS.md'), 'utf8'), '');
+  assert.equal(await fs.readFile(path.join(root, 'CHANGELOG.project.md'), 'utf8'), 'Starter\n');
+  await fs.writeFile(path.join(root, '.agents/project/AGENTS.md'), 'My rules\n');
+  await installMissingDeveloperStarters(update, root);
+  assert.equal(await fs.readFile(path.join(root, '.agents/project/AGENTS.md'), 'utf8'), 'My rules\n');
+});

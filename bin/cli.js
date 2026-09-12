@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 const { Command } = require('commander');
-const registerExtensions = require('../commands/extensions');
+const registerSkills = require('../commands/skills');
+const { runCoreDevelopment } = require('../commands/coredev');
 const initialiseCommand = require('../commands/initialise');
 const coreupdateCommand = require('../commands/coreupdate');
 const doctorCommand = require('../commands/doctor');
@@ -14,21 +15,20 @@ program
   .description('Developer CLI for managing Supacharger locally.')
   .version(version);
 
-program
-  .option('-s, --site <url>', 'Site URL')
-  .action(() => {
-    const options = program.opts();
-    if (options.site) {
-      console.log(`Hello world, your site is ${options.site}`);
-    }
-  });
 
-registerExtensions(program);
+registerSkills(program);
 
-program.command('install <id>').description('Retired legacy installer').action(() => {
-  console.error('Use supacharger extension install <id> --source <bundle>. Legacy executable plugin installs are retired.');
-  process.exitCode = 1;
-});
+const coredev = program
+  .command('coredev')
+  .description(require('../messages/en.json').CoreDevelopmentCli.CommandDescription);
+
+coredev.command('install')
+  .description(require('../messages/en.json').CoreDevelopmentCli.InstallDescription)
+  .action(() => runCoreDevelopment('install'));
+
+coredev.command('update')
+  .description(require('../messages/en.json').CoreDevelopmentCli.UpdateDescription)
+  .action(() => runCoreDevelopment('update'));
 
 program
   .command('coreupdate')
@@ -46,7 +46,8 @@ program
 program
   .command('init [target]')
   .description('Clone the latest Supacharger starter into a target directory (use "." for current directory)')
-  .action((target) => initialiseCommand(target ?? '.'));
+  .option('--skip-skills', require('../messages/en.json').PublicSkillsCli.SkipDescription)
+  .action((target, options) => initialiseCommand(target ?? '.', options));
 
 program.parseAsync(process.argv).catch(error => { console.error(error.message); process.exitCode = 1; });
 

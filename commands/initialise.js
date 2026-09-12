@@ -4,6 +4,8 @@ const os = require('os');
 const path = require('path');
 const readline = require('readline');
 
+const { printGitHubDevelopmentWarning } = require('./common/github-development-warning');
+
 const CORE_REPOSITORY = 'glowplug-studio/supacharger';
 const CORE_SSH_URL = `git@github.com:${CORE_REPOSITORY}.git`;
 
@@ -142,7 +144,7 @@ function gitClone(repoUrl, targetDir) {
   });
 }
 
-async function initialise(target = '.') {
+async function initialise(target = '.', options = {}) {
   const cwd = process.cwd();
   const useCurrentDir = isCurrentDirTarget(target);
   const resolvedTargetDir = useCurrentDir ? cwd : path.resolve(cwd, target);
@@ -150,6 +152,7 @@ async function initialise(target = '.') {
 
   try {
     assertSafeTargetDirectory(resolvedTargetDir, cwd);
+    printGitHubDevelopmentWarning();
     if (!useCurrentDir) {
       const targetExists = await pathExists(resolvedTargetDir);
       if (!targetExists) {
@@ -201,6 +204,14 @@ async function initialise(target = '.') {
     console.log('\x1b[34mMoving files from temporary folder into target directory...\x1b[0m');
     await moveAllFilesForce(tempDir, resolvedTargetDir);
   
+    if (!options.skipSkills && process.stdin.isTTY && process.stdout.isTTY) {
+      try {
+        await require('./skills/installer.cjs').runSkills([], { root: resolvedTargetDir });
+      } catch (error) {
+        console.warn(require('./skills/installer.cjs').message('OptionalFailed', { reason: error.message }));
+      }
+    }
+
     console.log('\x1b[32m✓ Initialise completed successfully. You should now commit changes to your main branch.\x1b[0m');
   } catch (err) {
     if (err.message === 'Cancelled by user') {

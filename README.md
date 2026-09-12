@@ -2,13 +2,7 @@
 
 Developer CLI for installing and safely updating Supacharger applications.
 
-## Local extensions
-
-Run `supacharger extension install brevo-email --source /path/to/supacharger/extensions/brevo-email --plan` in an application, review, then repeat without `--plan`. `supacharger extension doctor brevo-email` checks installed hashes. Read the installed `docs/extensions/brevo-email/INSTALL.md` for static project-owned integration; installation does not activate delivery.
-
-The installer is maintained in Core at `tools/supacharger-extensions/installer.cjs` and shipped byte-identically in `commands/extensions/installer.cjs`. It accepts manifest-v1/v2 local bundles and Core ownership-v2 applications. V2 adds `supabase/functions/ext-<id>/` and explicitly marked namespaced forward migrations. Installed migration bytes cannot change; timestamp collisions stop installation. Core paths, symlinks, traversal, local edits and same-version changes are refused. Recovery files remain under `.supacharger/extension-transactions/`; the Core lock is untouched. Dependency/config edits, applying migrations, deployment and automatic removal remain explicit manual steps. Brevo 2.0.0 supplies reliable delivery infrastructure so apps pass authorised props rather than build their own retry worker.
-
-The unsafe submodule/`install.js` installer and enable/disable stubs are retired. These changes are local and not yet published to npm. Token-gated downloads and commercial purchases will be managed through Specdrive later; no token command exists yet.
+Commands print a yellow demonstration warning before `init`, remote `coreupdate` and `coredev` contact private development repositories on GitHub. Public-skills operations, local `coreupdate --source` and `doctor` do not print it.
 
 `supacharger init [target]` installs the starter, including starter `next-intl` configuration and message catalogues. After installation, each application owns `src/i18n/config.ts`, `src/i18n/request.ts`, and the complete `messages/` directory.
 
@@ -16,11 +10,24 @@ The unsafe submodule/`install.js` installer and enable/disable stubs are retired
 
 `supacharger doctor` is read-only. It checks the Next.js Proxy entry point, the claims-only database-free Proxy helper, all three protected server-access boundaries, enabled onboarding and billing recovery destinations, canonical account/organisation configuration, managed organisation routes/tests/adapters, duplicate App Router pages after route-group normalisation, required English namespaces, obsolete `/auth/*` and `/organisation` pages, the ownership manifest, required scripts and Bruno assets, Supabase dependencies, hook configuration, local TOTP enrol/verify capability, migrations and aliases, and public environment-variable names. It also fails when the preserved configuration still declares obsolete billing-gate properties or `MFA_TOTP.ENABLED`. A configured setup page fails if it inherits `requireOnboardedUser()` or `requireAppAccess()`; a configured acquisition page fails if it inherits `requireAppAccess()`. The command never prints values, rewrites developer configuration, contacts a linked project, changes routes, or changes a database.
 
+## Optional Core contributor instructions
+
+These private instructions are inert and absent from ordinary application use. They are not installed by `init`, `coreupdate`, `doctor`, `skills`, or a normal non-recursive clone.
+
+Run these commands explicitly from a Git-based Supacharger project only when contributing to Core:
+
+```bash
+supacharger coredev install
+supacharger coredev update
+```
+
+`install` registers or initialises `.agents/supacharger/core-development/` from the private contributor repository over SSH. `update` refuses local submodule changes, then checks out the latest configured remote branch. Review and commit `.gitmodules` and the submodule reference when the parent repository should retain them. A recursive Git clone may initialise an already committed submodule without invoking the CLI.
+
 ## Managed core updates
 
 The canonical core publishes version 2 of `.supacharger/managed-files.json`. It separates byte-identical `managedPaths`, contract-aware `mergeManagedPaths`, append-only `forwardOnlyMigrationPaths`, and preserved `developerOwnedPaths`. Reusable authentication/account routes live under `src/app/(supacharger)/`; product routes under `src/app/(project)/`, translations, project CSS, and `src/supacharger.adapters/` remain developer-owned.
 
-`tailwind.config.ts` is exact Core-managed and imports the blank developer-owned `tailwind.project.config.ts` preset. Updates install that preset only when absent; projects and extension installers add Tailwind configuration there. When upgrading from the former merge-managed ownership, the CLI stops if the root Tailwind file contains project changes so they can be moved into the preset before replacement.
+`tailwind.config.ts` is exact Core-managed and imports the blank developer-owned `tailwind.project.config.ts` preset. Updates install that preset only when absent; project-specific Tailwind configuration belongs there. When upgrading from the former merge-managed ownership, the CLI stops if the root Tailwind file contains project changes so they can be moved into the preset before replacement.
 
 When managed public authentication routes replace unchanged legacy wrappers under `src/app/(project)/(unauthenticated)/account`, `coreupdate` backs up and removes those wrappers before installing the canonical routes. It stops if a wrapper differs from the installed Core baseline so product behaviour cannot be discarded. The update installs developer-owned auth, account, billing, and organisation adapter starters only when each file is missing; established product presentation and integrations are preserved on every later update. Managed authentication, account, and organisation JSX uses semantic hooks whose complete presentation belongs in the preserved `src/styles/supacharger-auth.css`, `src/styles/supacharger-account.css`, and `src/styles/supacharger-organisations.css` files. Organisation adapters include the page, navigation, chrome, and profile extension seams under `src/supacharger.adapters/organisations/`.
 
@@ -73,3 +80,28 @@ This is a displayed notice, not a required checkbox or stored consent record. `A
 A Git update resolves the requested ref once and fetches that commit, even if the branch moves while conflicts are reviewed. Both update paths record the checked-out commit only after the declared checks and managed-file hash verification succeed. Use an explicit commit SHA for a separately reviewed plan and update to target the same release.
 
 The updater installs `src/assets/svgr/ui/image-loader.svg` only when absent and preserves existing artwork, including during legacy updates without a manifest. These CLI changes must be published before they are available through npm.
+
+## Free public agent skills
+
+This feature downloads selected skills from the public `glowplug-studio/glowplug-skills` GitHub repository over HTTPS; no purchase or token is required.
+
+```bash
+supacharger skills install
+supacharger skills install general/changelog
+supacharger skills update general/changelog
+supacharger skills update
+supacharger skills install general/changelog --ref <commit-or-tag>
+supacharger init my-project --skip-skills
+```
+
+Without identifiers, install/update presents grouped checkboxes with descriptions and installation status. An empty selection skips. Named identifiers support agents and non-interactive terminals; non-interactive calls without identifiers fail clearly. Interactive initialisation offers installation after creating the starter; an optional skills failure does not undo initialisation.
+
+Complete skill folders are installed at `.agents/skills/<name>/`, with immutable source commits and SHA-256 file hashes in `.supacharger/skills-lock.json`. Commit these together. Existing untracked destinations and local edits are refused; unchanged installations are idempotent. Skill updates require the explicit update command and do not advance the Core lock. Downloaded skill scripts are not executed. A killed installer may leave `.supacharger/skills-install.lock` and `skills-transaction-*` recovery data; inspect them before retrying.
+
+Maintainers can test committed local source with `--source /path/to/glowplug-skills`. Uncommitted source changes are not exported. Publish recorded catalogue commits before expecting remote installs to retrieve them. This command set must be released to npm before older globally installed CLIs can use it.
+
+The canonical installer is Core's `tools/supacharger-skills/installer.cjs`, copied byte-identically into `commands/skills/installer.cjs`. Keep both copies and their tests aligned. Root `AGENTS.md`, `.agents/project/AGENTS.md` and `CHANGELOG.project.md` are installed only when missing during Core updates; existing project instructions are preserved. Shared `.agents/supacharger/guidance.md` and `CHANGELOG.md` follow Core's exact-managed manifest.
+
+See [Agent guidance](https://supacharger.dev/docs/agents), [Skills](https://supacharger.dev/docs/skills) and [Contributing](https://supacharger.dev/docs/contributing).
+
+The public skill checkbox dependency requires Node.js 22.13 or later in the 22.x line, or Node.js 24 or later.
