@@ -587,6 +587,20 @@ async function migrateAccountAlignmentConfig(rootDir, options = {}) {
   return missing;
 }
 
+async function migrateSignUpTermsConfig(rootDir, options = {}) {
+  const configPath = path.join(rootDir, 'src', 'supacharger.config.ts');
+  let source;
+  try { source = await fs.readFile(configPath, 'utf8'); }
+  catch (error) { if (error?.code === 'ENOENT') return []; throw error; }
+  const missing = missingObjectKeys(source, 'AUTHENTICATION', ['SIGN_UP_TERMS_URL'])
+    .map((key) => `AUTHENTICATION.${key}`);
+  if (!missing.length || options.plan === true) return missing;
+  if (options.backup !== false) await backupConflicts(rootDir, rootDir, ['src/supacharger.config.ts']);
+  source = insertObjectEntries(source, 'AUTHENTICATION', [['SIGN_UP_TERMS_URL', 'SIGN_UP_TERMS_URL: null,']]);
+  await fs.writeFile(configPath, source, 'utf8');
+  return missing;
+}
+
 async function migrateSessionTransferConfig(rootDir, options = {}) {
   const configPath = path.join(rootDir, 'src', 'supacharger.config.ts');
   let source;
@@ -1459,6 +1473,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     imageFunctionConfigMigration,
     rootDocumentConfigMigration,
     sessionTransferConfigMigration,
+    signUpTermsConfigMigration,
   ] = await Promise.all([
     managedFiles(baselineDir, baselineManifest),
     managedFiles(latestDir, latestManifest),
@@ -1476,6 +1491,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     migrateImageFunctionConfig(rootDir, { plan: true }),
     migrateRootDocumentConfig(rootDir, { plan: true }),
     migrateSessionTransferConfig(rootDir, { plan: true }),
+    migrateSignUpTermsConfig(rootDir, { plan: true }),
   ]);
   const writes = [];
   for (const relPath of latestFiles) {
@@ -1505,6 +1521,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     removals,
     rootDocumentConfigMigration,
     sessionTransferConfigMigration,
+    signUpTermsConfigMigration,
     writes,
   };
 }
@@ -1536,13 +1553,14 @@ async function printPlan(rootDir, installState, options = {}) {
     console.log(`Manual merge-managed changes: ${plan.manualMergeChanges.length}`);
     plan.manualMergeChanges.forEach((file) => console.log(`  MANUAL MERGE ${file}`));
     console.log(
-      `Developer config changes: ${plan.accountAlignmentConfigMigration.length + plan.authProviderConfigMigration.length + plan.legacyAuthSessionConfigMigration.length + plan.legacyMfaConfigMigration.length + plan.rootDocumentConfigMigration.length + plan.sessionTransferConfigMigration.length}`
+      `Developer config changes: ${plan.accountAlignmentConfigMigration.length + plan.authProviderConfigMigration.length + plan.legacyAuthSessionConfigMigration.length + plan.legacyMfaConfigMigration.length + plan.rootDocumentConfigMigration.length + plan.sessionTransferConfigMigration.length + plan.signUpTermsConfigMigration.length}`
     );
     plan.accountAlignmentConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
     plan.authProviderConfigMigration.forEach((provider) => console.log(`  CONFIG AUTH_PROVDERS_ENABLED.${provider}=false`));
     plan.legacyAuthSessionConfigMigration.forEach((key) => console.log(`  CONFIG REMOVE ${key}`));
     plan.legacyMfaConfigMigration.forEach((key) => console.log(`  CONFIG REMOVE ${key}`));
     plan.rootDocumentConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
+    plan.signUpTermsConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
     plan.sessionTransferConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
     console.log(`Local Supabase TOTP changes: ${plan.localTotpConfigMigration.length}`);
     plan.localTotpConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}=true`));
@@ -1684,6 +1702,7 @@ Enter Y to continue: \u001b[0m`;
       await migrateRootDocumentConfig(cwd);
       await migrateAccountAlignmentConfig(cwd);
       await migrateSessionTransferConfig(cwd);
+      await migrateSignUpTermsConfig(cwd);
       await mergeEnglishCatalogue(cwd, updateDir);
       await migrateLegacyPostcssConfig(cwd);
       await personaliseStarterProjectStyles(cwd);
@@ -1791,6 +1810,7 @@ Enter Y to continue: \u001b[0m`;
     await migrateRootDocumentConfig(cwd);
     await migrateAccountAlignmentConfig(cwd);
     await migrateSessionTransferConfig(cwd);
+    await migrateSignUpTermsConfig(cwd);
     await mergeEnglishCatalogue(cwd, updateDir);
     await migrateLegacyPostcssConfig(cwd);
     await personaliseStarterProjectStyles(cwd);
@@ -1824,6 +1844,7 @@ coreupdate.testHelpers = {
   migrateAuthProviderConfig,
   migrateAccountAlignmentConfig,
   migrateSessionTransferConfig,
+  migrateSignUpTermsConfig,
   migrateLegacyAuthSessionConfig,
   migrateLegacyMfaConfig,
   migrateLocalTotpConfig,

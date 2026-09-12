@@ -1010,3 +1010,23 @@ test('request guard starter installs on upgrade and preserves an existing projec
   await installMissingDeveloperStarters(update, root);
   assert.equal(await fs.readFile(path.join(root, file), 'utf8'), 'project guard\n');
 });
+
+
+test('signup terms migration previews, defaults to null and preserves custom URLs', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'signup-terms-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'src'));
+  const file = path.join(root, 'src', 'supacharger.config.ts');
+  const source = 'export default {\n  AUTHENTICATION: {\n    EMAIL_PASSWORD: { SIGN_UP: true },\n  },\n};';
+  await fs.writeFile(file, source);
+  const migrate = coreupdate.testHelpers.migrateSignUpTermsConfig;
+  assert.deepEqual(await migrate(root, { plan: true }), ['AUTHENTICATION.SIGN_UP_TERMS_URL']);
+  assert.equal(await fs.readFile(file, 'utf8'), source);
+  await migrate(root, { backup: false });
+  assert.match(await fs.readFile(file, 'utf8'), /SIGN_UP_TERMS_URL: null/);
+  assert.deepEqual(await migrate(root, { backup: false }), []);
+  const customised = (await fs.readFile(file, 'utf8')).replace('SIGN_UP_TERMS_URL: null', "SIGN_UP_TERMS_URL: 'https://example.com/legal'");
+  await fs.writeFile(file, customised);
+  assert.deepEqual(await migrate(root, { backup: false }), []);
+  assert.equal(await fs.readFile(file, 'utf8'), customised);
+});
