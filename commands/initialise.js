@@ -6,6 +6,8 @@ const readline = require('readline');
 
 const { printGitHubDevelopmentWarning } = require('./common/github-development-warning');
 
+const { prepareStarter } = require('./common/test-distribution');
+
 const CORE_REPOSITORY = 'glowplug-studio/supacharger';
 const CORE_SSH_URL = `git@github.com:${CORE_REPOSITORY}.git`;
 
@@ -197,6 +199,7 @@ async function initialise(target = '.', options = {}) {
     const { stdout: commitHash } = await execCommand('git rev-parse HEAD', { cwd: tempDir });
     const trimmedHash = commitHash.trim();
 
+    await prepareStarter(tempDir);
     await removeGitDir(tempDir);
 
     await writeCoreLock(tempDir, trimmedHash);

@@ -7,6 +7,9 @@ const { isDeepStrictEqual } = require('node:util');
 
 const { printGitHubDevelopmentWarning } = require('./common/github-development-warning');
 
+const { cleanScripts, isTestScript } = require('./common/test-distribution');
+const cleanupMessages = require('../messages/en.json').ApplicationCleanup;
+
 const CORE_REPOSITORY = 'glowplug-studio/supacharger';
 const CORE_SSH_URL = `git@github.com:${CORE_REPOSITORY}.git`;
 const CORE_LOCK_FILE = path.join('.supacharger', 'core-lock.json');
@@ -90,7 +93,7 @@ const DEVELOPER_OWNED_FILES = [
   PROJECT_STYLES_FILE,
   CORE_LOCK_FILE,
 ];
-const DEVELOPER_OWNED_DIRECTORIES = ['messages'];
+const DEVELOPER_OWNED_DIRECTORIES = ['messages', path.join('public', 'images', 'email-template')];
 const DEVELOPER_OWNED_PATHS = [
   ...DEVELOPER_OWNED_FILES,
   ...DEVELOPER_OWNED_DIRECTORIES,
@@ -992,6 +995,7 @@ async function mergeDependencyContract(rootDir, incomingPackage) {
   const packagePath = path.join(rootDir, 'package.json');
   const currentPackage = await readJson(packagePath);
   const mergedPackage = { ...currentPackage };
+  if (currentPackage.scripts) mergedPackage.scripts = cleanScripts(currentPackage.scripts);
 
   if (incomingPackage.packageManager) mergedPackage.packageManager = incomingPackage.packageManager;
   if (incomingPackage.engines) {
@@ -1097,6 +1101,7 @@ async function assessPostUpdateWork(rootDir, updateDir, options = {}) {
 
   return {
     dependencyChanged: dependencyContractChanged(currentPackage, incomingPackage),
+    removedTestScripts: Object.entries(currentPackage.scripts ?? {}).filter(([name, command]) => isTestScript(name, command)).map(([name]) => name),
     incomingPackage,
     incomingRoot: updateDir,
     incomingFiles,
@@ -1365,7 +1370,10 @@ async function moveFiles(updateDir, rootDir, preservedPaths = [], managedPaths =
 
 async function installMissingDeveloperStarters(updateDir, rootDir, relativePaths = DEVELOPER_STARTERS) {
   const installed = [];
-  for (const relPath of relativePaths) {
+  const references = relativePaths === DEVELOPER_STARTERS
+    ? (await walkFiles(updateDir)).filter((file) => file.startsWith(`docs${path.sep}agents${path.sep}`) && file.endsWith('.md'))
+    : [];
+  for (const relPath of [...relativePaths, ...references]) {
     const source = path.join(updateDir, relPath);
     const target = path.join(rootDir, relPath);
     try {
@@ -1515,6 +1523,7 @@ async function printPlan(rootDir, installState, options = {}) {
     console.log(`Obsolete managed removals: ${plan.removals.length}`);
     plan.removals.forEach((file) => console.log(`  REMOVE ${file}`));
     console.log(`Dependency contract changed: ${plan.assessment.dependencyChanged ? 'yes' : 'no'}`);
+    plan.assessment.removedTestScripts.forEach((name) => console.log(cleanupMessages.RemovedTestScript.replace('{name}', name)));
     console.log(`Changed migrations: ${plan.assessment.changedMigrations.length}`);
     plan.assessment.changedMigrations.forEach(({ path: migration }) => console.log(`  MIGRATION ${migration}`));
     console.log(`Satisfied migration aliases: ${plan.assessment.satisfiedMigrationAliases.length}`);

@@ -65,5 +65,8 @@
     "SkipDescription": "Skip optional public skill selection",
     "OptionalFailed": "Optional skills were not installed: {reason}. Retry with supacharger skills install.",
     "RecoveryRetained": " Recovery files retained at {directory}: {reason}"
+  },
+  "ApplicationCleanup": {
+    "RemovedTestScript": "  REMOVE TEST SCRIPT {name}"
   }
 }

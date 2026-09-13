@@ -105,3 +105,13 @@ The canonical installer is Core's `tools/supacharger-skills/installer.cjs`, copi
 See [Agent guidance](https://supacharger.dev/docs/agents), [Skills](https://supacharger.dev/docs/skills) and [Contributing](https://supacharger.dev/docs/contributing).
 
 The public skill checkbox dependency requires Node.js 22.13 or later in the 22.x line, or Node.js 24 or later.
+
+## Agent guidance and application verification
+
+Read `AGENTS.md`, then `.agents/project/AGENTS.md`. Initialisation removes test suites, fixtures and test scripts from the cloned starter while preserving installed skills. Core updates remove obsolete test package scripts, install missing `docs/agents/*.md` references and preserve existing references for deliberate review. Application files outside obsolete managed paths are not swept by an update. Maintainer tests remain in this CLI repository and outside the published npm package.
+
+The upstream Core `.gitignore` excludes its local skill installations. Initialisation removes that marked Core-only block so applications may commit selected skills and their installation records. Skill records remain independent of the Core revision and are managed by the skills installer.
+
+### Email branding
+
+Initial setup copies the tracked `public/images/email-template/email-logo.png` from Core. This directory is developer-owned: replace the logo and commit it. `coreupdate` preserves it and does not install missing email branding files.
