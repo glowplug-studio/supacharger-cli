@@ -15,7 +15,9 @@ const CORE_SSH_URL = `git@github.com:${CORE_REPOSITORY}.git`;
 const CORE_LOCK_FILE = path.join('.supacharger', 'core-lock.json');
 const MANAGED_FILES_MANIFEST = path.join('.supacharger', 'managed-files.json');
 const MIGRATION_ALIASES_FILE = path.join('.supacharger', 'migration-aliases.json');
-const AUTOMATIC_MERGE_PATHS = new Set(['package.json', 'package-lock.json', 'supabase/config.toml']);
+const AUTOMATIC_MERGE_PATHS = new Set(
+  ['package.json', 'package-lock.json', 'supabase/config.toml'].map((entry) => path.normalize(entry))
+);
 const DEFAULT_MIGRATION_PATHS = [path.join('supabase', 'migrations')];
 const PROJECT_STYLES_FILE = path.join('src', 'styles', 'project.css');
 const PROJECT_TAILWIND_CONFIG_FILE = 'tailwind.project.config.ts';
@@ -204,17 +206,6 @@ function askYesNo(question) {
   });
 }
 
-// Helper function to repeatedly ask for a valid action, now includes 'OB'
-async function askAction(prompt) {
-  while (true) {
-    const answer = (await askYesNo(prompt)).toUpperCase();
-    if (['O', 'S', 'E', 'OB'].includes(answer)) {
-      return answer;
-    }
-    console.log('\x1b[31mInvalid input. Please enter O, S, OB, or E.\x1b[0m');
-  }
-}
-
 async function readLegacyInstallHash(configPath) {
   try {
     const content = await fs.readFile(configPath, 'utf8');
@@ -388,6 +379,21 @@ function tomlSectionBounds(source, sectionName) {
   return { start: heading.index, end: next?.index ?? source.length };
 }
 
+function migrateTotpConfigSource(source, keys = ['enroll_enabled', 'verify_enabled']) {
+  const bounds = tomlSectionBounds(source, 'auth.mfa.totp');
+  if (!bounds) {
+    return `${source.replace(/\s*$/, '')}\n\n[auth.mfa.totp]\n${keys.map((key) => `${key} = true`).join('\n')}\n`;
+  }
+
+  let migratedSection = source.slice(bounds.start, bounds.end);
+  for (const key of keys) {
+    const property = new RegExp(`^${key}\\s*=.*$`, 'm');
+    if (property.test(migratedSection)) migratedSection = migratedSection.replace(property, `${key} = true`);
+    else migratedSection = `${migratedSection.replace(/\s*$/, '')}\n${key} = true\n`;
+  }
+  return `${source.slice(0, bounds.start)}${migratedSection}${source.slice(bounds.end)}`;
+}
+
 async function migrateLocalTotpConfig(rootDir, options = {}) {
   const configPath = path.join(rootDir, 'supabase', 'config.toml');
   let source;
@@ -408,20 +414,11 @@ async function migrateLocalTotpConfig(rootDir, options = {}) {
   if (options.backup !== false) {
     await backupConflicts(rootDir, rootDir, ['supabase/config.toml']);
   }
-  let migrated = source;
-  if (!bounds) {
-    migrated = `${source.replace(/\s*$/, '')}\n\n[auth.mfa.totp]\nenroll_enabled = true\nverify_enabled = true\n`;
-  } else {
-    let migratedSection = section;
-    for (const key of ['enroll_enabled', 'verify_enabled']) {
-      const property = new RegExp(`^${key}\\s*=.*$`, 'm');
-      if (property.test(migratedSection)) migratedSection = migratedSection.replace(property, `${key} = true`);
-      else migratedSection = `${migratedSection.replace(/\s*$/, '')}\n${key} = true\n`;
-    }
-    migrated = `${source.slice(0, bounds.start)}${migratedSection}${source.slice(bounds.end)}`;
-  }
+  const migrated = migrateTotpConfigSource(source);
   await fs.writeFile(configPath, migrated, 'utf8');
-  console.log('\x1b[34mEnabled local Supabase TOTP enrolment and verification APIs. Restart the local stack to apply them.\x1b[0m');
+  if (!options.quiet) {
+    console.log('\x1b[34mEnabled local Supabase TOTP enrolment and verification APIs. Restart the local stack to apply them.\x1b[0m');
+  }
   return changes.map((key) => `auth.mfa.totp.${key}`);
 }
 
@@ -460,7 +457,9 @@ async function migrateImageFunctionConfig(rootDir, options = {}) {
   }
 
   await fs.writeFile(configPath, migrated, 'utf8');
-  console.log('\x1b[34mBundled the ImageMagick WASM asset for process-image-upload.\x1b[0m');
+  if (!options.quiet) {
+    console.log('\x1b[34mBundled the ImageMagick WASM asset for process-image-upload.\x1b[0m');
+  }
   return ['functions.process-image-upload.static_files'];
 }
 
@@ -1121,8 +1120,110 @@ async function mergeManagedContents(rootDir, manifest) {
   return contents;
 }
 
+async function allMergeManagedContents(rootDir, manifest) {
+  const contents = new Map();
+  for (const mergePath of manifest?.mergeManagedPaths ?? []) {
+    contents.set(mergePath, await readFileContents(path.join(rootDir, mergePath)));
+  }
+  return contents;
+}
+
+const APPLICATION_PACKAGE_KEYS = new Set([
+  'name',
+  'version',
+  'private',
+  'description',
+  'keywords',
+  'author',
+  'license',
+  'repository',
+  'bugs',
+  'homepage',
+]);
+const AUTOMATIC_PACKAGE_KEYS = new Set([
+  'packageManager',
+  'engines',
+  ...DEPENDENCY_OBJECT_KEYS,
+]);
+
+function packageJsonNeedsManualMerge(baselinePackage, latestPackage) {
+  if (!isDeepStrictEqual(cleanScripts(baselinePackage.scripts), cleanScripts(latestPackage.scripts))) return true;
+  const keys = new Set([...Object.keys(baselinePackage), ...Object.keys(latestPackage)]);
+  for (const key of keys) {
+    if (key === 'scripts' || APPLICATION_PACKAGE_KEYS.has(key) || AUTOMATIC_PACKAGE_KEYS.has(key)) continue;
+    if (!isDeepStrictEqual(baselinePackage[key], latestPackage[key])) return true;
+  }
+  return false;
+}
+
+async function matchesSupportedSupabaseConfigChange(baselineContent, latestContent) {
+  if (contentsEqual(baselineContent, latestContent)) return true;
+  if (baselineContent === null || latestContent === null) return false;
+
+  const baselineSource = baselineContent.toString('utf8');
+  const variants = [
+    baselineSource,
+    migrateTotpConfigSource(baselineSource, ['enroll_enabled']),
+    migrateTotpConfigSource(baselineSource, ['verify_enabled']),
+    migrateTotpConfigSource(baselineSource),
+  ];
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'supacharger-config-merge-'));
+  try {
+    for (const source of variants) {
+      if (Buffer.from(source).equals(latestContent)) return true;
+      await fs.rm(path.join(tempRoot, 'supabase'), { recursive: true, force: true });
+      await fs.mkdir(path.join(tempRoot, 'supabase'), { recursive: true });
+      await fs.writeFile(path.join(tempRoot, 'supabase', 'config.toml'), source);
+      await migrateImageFunctionConfig(tempRoot, { backup: false, quiet: true });
+      const migrated = await fs.readFile(path.join(tempRoot, 'supabase', 'config.toml'));
+      if (migrated.equals(latestContent)) return true;
+    }
+    return false;
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function changedAutomaticMergePathsFromContents(baselineContents, latestDir, manifest) {
+  const automaticPaths = (manifest?.mergeManagedPaths ?? []).filter((mergePath) =>
+    AUTOMATIC_MERGE_PATHS.has(mergePath)
+  );
+  const changed = [];
+  const readLatest = (mergePath) => readFileContents(path.join(latestDir, mergePath));
+
+  if (automaticPaths.includes('package.json')) {
+    const [baselineContent, latestContent] = [baselineContents.get('package.json'), await readLatest('package.json')];
+    if (baselineContent === undefined || baselineContent === null || latestContent === null) changed.push('package.json');
+    else if (packageJsonNeedsManualMerge(JSON.parse(baselineContent), JSON.parse(latestContent))) changed.push('package.json');
+  }
+
+  if (automaticPaths.includes('package-lock.json')) {
+    const [baselineLock, latestLock] = [baselineContents.get('package-lock.json'), await readLatest('package-lock.json')];
+    if (baselineLock === undefined || baselineLock === null || latestLock === null) changed.push('package-lock.json');
+    else if (!baselineLock.equals(latestLock)) {
+      const baselinePackage = baselineContents.get('package.json');
+      const latestPackage = await readLatest('package.json');
+      if (
+        baselinePackage === undefined || baselinePackage === null || latestPackage === null ||
+        dependencyContract(JSON.parse(baselinePackage)) === dependencyContract(JSON.parse(latestPackage))
+      ) changed.push('package-lock.json');
+    }
+  }
+
+  if (automaticPaths.includes(path.normalize('supabase/config.toml'))) {
+    const configPath = path.normalize('supabase/config.toml');
+    const baselineConfig = baselineContents.get(configPath);
+    const latestConfig = await readLatest(configPath);
+    if (baselineConfig === undefined || !await matchesSupportedSupabaseConfigChange(baselineConfig, latestConfig)) {
+      changed.push(configPath);
+    }
+  }
+
+  return changed;
+}
+
 async function changedManualMergePaths(baselineDir, latestDir, manifest) {
-  const baselineContents = await mergeManagedContents(baselineDir, manifest);
+  const baselineContents = await managedFileContents(baselineDir, await walkFiles(baselineDir));
   return changedManualMergePathsFromContents(baselineContents, latestDir, manifest);
 }
 
@@ -1132,7 +1233,8 @@ async function changedManualMergePathsFromContents(baselineContents, latestDir, 
   for (const [mergePath, latestContent] of latestContents) {
     if (!baselineContents.has(mergePath) || !contentsEqual(baselineContents.get(mergePath), latestContent)) changed.push(mergePath);
   }
-  return changed;
+  changed.push(...await changedAutomaticMergePathsFromContents(baselineContents, latestDir, manifest));
+  return [...new Set(changed)];
 }
 
 async function changedOwnershipTransitionPathsFromContents(rootDir, baselineMergeContents, latestDir, latestManifest) {
@@ -1271,7 +1373,67 @@ function matchingPreservedPath(relPath, preservedPaths) {
   );
 }
 
+async function ensureLocalBackupIgnored(rootDir) {
+  const dotGit = path.join(rootDir, '.git');
+  let gitDir = dotGit;
+  try {
+    const stat = await fs.lstat(dotGit);
+    if (stat.isFile()) {
+      const pointer = await fs.readFile(dotGit, 'utf8');
+      const match = /^gitdir:\s*(.+)\s*$/m.exec(pointer);
+      if (!match) return;
+      gitDir = path.resolve(rootDir, match[1]);
+    } else if (!stat.isDirectory()) {
+      return;
+    }
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+
+  try {
+    const commonDir = (await fs.readFile(path.join(gitDir, 'commondir'), 'utf8')).trim();
+    if (commonDir) gitDir = path.resolve(gitDir, commonDir);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+
+  const excludePath = path.join(gitDir, 'info', 'exclude');
+  let contents = '';
+  try {
+    contents = await fs.readFile(excludePath, 'utf8');
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  const rule = '/.supacharger/backups/';
+  if (contents.split(/\r?\n/).includes(rule)) return;
+  await fs.mkdir(path.dirname(excludePath), { recursive: true });
+  const separator = contents && !contents.endsWith('\n') ? '\n' : '';
+  await fs.writeFile(excludePath, `${contents}${separator}# Supacharger local recovery copies\n${rule}\n`, 'utf8');
+}
+
+async function findNewManagedPathCollisions(rootDir, baselineFiles, incomingFiles, incomingRoot) {
+  const baseline = new Set(baselineFiles);
+  const collisions = [];
+  for (const relPath of incomingFiles) {
+    if (baseline.has(relPath)) continue;
+    const localPath = path.join(rootDir, relPath);
+    let stat;
+    try {
+      stat = await fs.lstat(localPath);
+    } catch (error) {
+      if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') continue;
+      throw error;
+    }
+    if (!stat.isFile() || !await filesEqual(localPath, path.join(incomingRoot, relPath))) {
+      collisions.push(relPath);
+    }
+  }
+  return collisions.sort();
+}
+
 async function backupConflicts(updateDir, rootDir, conflictFiles, backupRoot) {
+  await ensureLocalBackupIgnored(rootDir);
   const resolvedBackupRoot = backupRoot ?? path.join(rootDir, '.supacharger', 'backups', new Date().toISOString().replace(/[:.]/g, '-'));
   for (const relPath of conflictFiles) {
     const localFile = path.join(rootDir, relPath);
@@ -1475,11 +1637,17 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
       writes.push(relPath);
     }
   }
+  const newManagedPathCollisions = await findNewManagedPathCollisions(
+    rootDir,
+    baselineFiles,
+    latestFiles,
+    latestDir,
+  );
   const latestSet = new Set(latestFiles);
   const removals = baselineFiles.filter(
     (file) => !latestSet.has(file) && !matchingPreservedPath(file, latestManifest?.developerOwnedPaths ?? DEVELOPER_OWNED_PATHS)
   );
-  const baselineMergeContents = await mergeManagedContents(baselineDir, baselineManifest);
+  const baselineMergeContents = await allMergeManagedContents(baselineDir, baselineManifest);
   return {
     assessment,
     accountAlignmentConfigMigration,
@@ -1493,6 +1661,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     localTotpConfigMigration,
     imageFunctionConfigMigration,
     manualMergeChanges: await changedManualMergePaths(baselineDir, latestDir, latestManifest),
+    newManagedPathCollisions,
     ownershipTransitionChanges: await changedOwnershipTransitionPathsFromContents(
       rootDir,
       baselineMergeContents,
@@ -1520,6 +1689,8 @@ async function printPlan(rootDir, installState, options = {}) {
     console.log('\nSupacharger core update plan (no project files or databases changed)');
     console.log(`Managed writes: ${plan.writes.length}`);
     plan.writes.forEach((file) => console.log(`  WRITE ${file}`));
+    console.log(`New managed-path collisions: ${plan.newManagedPathCollisions.length}`);
+    plan.newManagedPathCollisions.forEach((file) => console.log(`  COLLISION ${file}`));
     console.log(`Obsolete managed removals: ${plan.removals.length}`);
     plan.removals.forEach((file) => console.log(`  REMOVE ${file}`));
     console.log(`Dependency contract changed: ${plan.assessment.dependencyChanged ? 'yes' : 'no'}`);
@@ -1621,7 +1792,7 @@ Enter Y to continue: \u001b[0m`;
       baselineManifest?.forwardOnlyMigrationPaths ?? DEFAULT_MIGRATION_PATHS,
     );
     const baselineMergeContents = await managedFileContents(updateDir, await walkFiles(updateDir));
-    const baselineOwnershipTransitionContents = await mergeManagedContents(updateDir, baselineManifest);
+    const baselineOwnershipTransitionContents = await allMergeManagedContents(updateDir, baselineManifest);
 
     const missingFiles = [];
     const differentFiles = [];
@@ -1651,6 +1822,17 @@ Enter Y to continue: \u001b[0m`;
       targetCommit = await cloneLatestSource(updateDir, { ref: options.source ? options.ref : targetCommit, repository: installState.repository, source: options.source });
       const latestManifest = await readManagedManifest(updateDir);
       const latestManagedFiles = await managedFiles(updateDir, latestManifest);
+      const newManagedPathCollisions = await findNewManagedPathCollisions(
+        cwd,
+        baselineManagedFiles,
+        latestManagedFiles,
+        updateDir,
+      );
+      if (newManagedPathCollisions.length > 0) {
+        throw new Error(
+          `Core introduces managed paths that collide with existing project files: ${newManagedPathCollisions.join(', ')}. Move or reconcile those files before updating.`,
+        );
+      }
       const manualMergeChanges = await changedManualMergePathsFromContents(
         baselineMergeContents,
         updateDir,
@@ -1716,11 +1898,9 @@ Enter Y to continue: \u001b[0m`;
     differentFiles.forEach((f) => console.log(`  - \x1b[31mMODIFIED\x1b[0m: ${f}`));
 
     const prompt = `
-\x1b[34mchoose action:
-\x1b[31m(O)\x1b[34m overwrite all
-\x1b[33m(S)\x1b[34m skip conflict files overwrite the rest
-\x1b[36m(OB)\x1b[34m overwrite all with backup of conflict files
-\x1b[35m(E)\x1b[0m exit
+\x1b[34mChoose action:
+\x1b[31m(O/OB)\x1b[34m overwrite all managed conflicts after creating recovery copies
+\x1b[35m(E)\x1b[0m exit without changing Core files
 \x1b[34mYour choice: \x1b[0m`;
 
     const action = (await askYesNo(prompt)).toUpperCase();
@@ -1730,8 +1910,8 @@ Enter Y to continue: \u001b[0m`;
       process.exit(0);
     }
 
-    if (action !== 'O' && action !== 'S' && action !== 'OB') {
-      console.log('\x1b[31mInvalid choice. Exiting.\x1b[0m');
+    if (!['O', 'OB'].includes(action)) {
+      console.log('\x1b[31mInvalid choice. Enter O or OB to overwrite after backup, or E to exit.\x1b[0m');
       process.exit(1);
     }
 
@@ -1745,6 +1925,17 @@ Enter Y to continue: \u001b[0m`;
     });
     const latestManifest = await readManagedManifest(updateDir);
     const latestManagedFiles = await managedFiles(updateDir, latestManifest);
+    const newManagedPathCollisions = await findNewManagedPathCollisions(
+      cwd,
+      baselineManagedFiles,
+      latestManagedFiles,
+      updateDir,
+    );
+    if (newManagedPathCollisions.length > 0) {
+      throw new Error(
+        `Core introduces managed paths that collide with existing project files: ${newManagedPathCollisions.join(', ')}. Move or reconcile those files before updating.`,
+      );
+    }
     const preservedPaths = latestManifest?.developerOwnedPaths ?? DEVELOPER_OWNED_PATHS;
     const manualMergeChanges = await changedManualMergePathsFromContents(
       baselineMergeContents,
@@ -1773,31 +1964,18 @@ Enter Y to continue: \u001b[0m`;
     });
     const latestManagedContents = await managedFileContents(updateDir, latestManagedFiles);
 
-    if (action === 'OB') {
-      // Backup conflicting files first
-      await backupConflicts(cwd, cwd, [...differentFiles, ...missingFiles]);
-      // Then move all files (including conflicts)
-      await moveFiles(updateDir, cwd, preservedPaths, latestManifest?.managedPaths ?? null);
-    } else if (action === 'O') {
-      await backupConflicts(cwd, cwd, [
-        ...latestManagedFiles,
-        ...baselineManagedFiles.filter((file) => !latestManagedFiles.includes(file)),
-      ]);
-      await moveFiles(updateDir, cwd, preservedPaths, latestManifest?.managedPaths ?? null);
-    } else if (action === 'S') {
-      await moveFiles(updateDir, cwd, [
-        ...preservedPaths,
-        ...differentFiles,
-        ...missingFiles,
-      ], latestManifest?.managedPaths ?? null);
-    }
+    await backupConflicts(cwd, cwd, [
+      ...latestManagedFiles,
+      ...baselineManagedFiles.filter((file) => !latestManagedFiles.includes(file)),
+    ]);
+    await moveFiles(updateDir, cwd, preservedPaths, latestManifest?.managedPaths ?? null);
     await installMissingDeveloperStarters(updateDir, cwd);
 
     await removeObsoleteManagedFiles(
       cwd,
       baselineManagedFiles,
       latestManagedFiles,
-      action === 'S' ? [...preservedPaths, ...differentFiles, ...missingFiles] : preservedPaths
+      preservedPaths,
     );
 
     await migrateLegacyAuthSessionConfig(cwd);
@@ -1826,6 +2004,10 @@ Enter Y to continue: \u001b[0m`;
     console.log('\x1b[32mUpdate complete and .sc-core-update folder removed.\x1b[0m');
   } catch (err) {
     console.error('Error during coreupdate:', err);
+    console.error(
+      'Recovery: the Core lock was not advanced. Inspect the Git diff and .supacharger/backups before retrying. ' +
+      'Restore application files from Git or the recovery copies as appropriate. Applied database migrations are forward-only and are not rolled back by file restoration.',
+    );
     process.exit(1);
   }
 }
@@ -1870,6 +2052,8 @@ coreupdate.testHelpers = {
   cloneAndCheckout,
   cloneLatestSource,
   filesEqual,
+  findNewManagedPathCollisions,
+  ensureLocalBackupIgnored,
 };
 
 module.exports = coreupdate;

@@ -5,7 +5,6 @@ const path = require('path');
 const readline = require('readline');
 
 const { printGitHubDevelopmentWarning } = require('./common/github-development-warning');
-
 const { prepareStarter } = require('./common/test-distribution');
 
 const CORE_REPOSITORY = 'glowplug-studio/supacharger';
@@ -26,31 +25,15 @@ function execCommand(command, options = {}) {
 }
 
 function promptYesOnly(question) {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
-
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve, reject) => {
     rl.question(question, answer => {
       rl.close();
       const trimmed = answer.trim();
-      if (trimmed === 'Y' || trimmed === 'y') {
-        resolve(true);
-      } else {
-        reject(new Error('Cancelled by user'));
-      }
+      if (trimmed === 'Y' || trimmed === 'y') resolve(true);
+      else reject(new Error('Cancelled by user'));
     });
   });
-}
-
-async function removeAllExceptGit(dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  await Promise.all(entries.map(async entry => {
-    if (entry.name === '.git') return;
-    const fullPath = path.join(dir, entry.name);
-    await fs.rm(fullPath, { recursive: true, force: true });
-  }));
 }
 
 async function removeGitDir(dir) {
@@ -59,39 +42,17 @@ async function removeGitDir(dir) {
     const stat = await fs.stat(gitPath);
     if (stat.isDirectory()) {
       await fs.rm(gitPath, { recursive: true, force: true });
-      console.log('\x1b[34m Removed .git directory from cloned folder.\x1b[0m');
+      console.log('\x1b[34mRemoved .git directory from prepared Core.\x1b[0m');
     }
-  } catch {
-    // .git does not exist, no action needed
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
   }
 }
 
 async function writeCoreLock(rootDir, commit) {
   const lockPath = path.join(rootDir, '.supacharger', 'core-lock.json');
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
-  await fs.writeFile(
-    lockPath,
-    `${JSON.stringify({ repository: CORE_REPOSITORY, commit }, null, 2)}\n`,
-    'utf8'
-  );
-}
-
-async function moveAllFilesForce(srcDir, destDir) {
-  const entries = await fs.readdir(srcDir, { withFileTypes: true });
-  for (const entry of entries) {
-    const srcPath = path.join(srcDir, entry.name);
-    const destPath = path.join(destDir, entry.name);
-
-    try {
-      await fs.access(destPath);
-      await fs.rm(destPath, { recursive: true, force: true });
-    } catch {
-      // destPath does not exist, no action needed
-    }
-
-    await fs.rename(srcPath, destPath);
-  }
-  await fs.rmdir(srcDir);
+  await fs.writeFile(lockPath, `${JSON.stringify({ repository: CORE_REPOSITORY, commit }, null, 2)}\n`, 'utf8');
 }
 
 async function pathExists(targetPath) {
@@ -128,85 +89,108 @@ function assertSafeTargetDirectory(targetDir, cwd = process.cwd()) {
 
 function gitClone(repoUrl, targetDir) {
   return new Promise((resolve, reject) => {
-    const gitProcess = spawn('git', ['clone', '--depth', '1', repoUrl, targetDir], {
-      stdio: 'inherit'
-    });
-
-    gitProcess.on('error', err => {
-      reject(err);
-    });
-
+    const gitProcess = spawn('git', ['clone', '--depth', '1', repoUrl, targetDir], { stdio: 'inherit' });
+    gitProcess.on('error', reject);
     gitProcess.on('close', code => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`git clone exited with code ${code}`));
-      }
+      if (code === 0) resolve();
+      else reject(new Error(`git clone exited with code ${code}`));
     });
   });
+}
+
+async function rollbackInitialise(targetDir, previousDir, installedNames, movedPrevious, targetExisted) {
+  for (const name of [...installedNames].reverse()) {
+    await fs.rm(path.join(targetDir, name), { recursive: true, force: true });
+  }
+  for (const name of [...movedPrevious].reverse()) {
+    await fs.rename(path.join(previousDir, name), path.join(targetDir, name));
+  }
+  if (!targetExisted) {
+    const remaining = await fs.readdir(targetDir);
+    if (remaining.length === 0) await fs.rmdir(targetDir);
+  }
+}
+
+async function installPreparedStarter(preparedDir, targetDir, previousDir, targetExisted) {
+  await fs.mkdir(targetDir, { recursive: true });
+  const movedPrevious = [];
+  const installedNames = [];
+  try {
+    const existing = await fs.readdir(targetDir, { withFileTypes: true });
+    for (const entry of existing) {
+      if (entry.name === '.git') continue;
+      await fs.rename(path.join(targetDir, entry.name), path.join(previousDir, entry.name));
+      movedPrevious.push(entry.name);
+    }
+
+    const prepared = await fs.readdir(preparedDir, { withFileTypes: true });
+    for (const entry of prepared) {
+      if (entry.name === '.git') continue;
+      await fs.rename(path.join(preparedDir, entry.name), path.join(targetDir, entry.name));
+      installedNames.push(entry.name);
+    }
+  } catch (error) {
+    try {
+      await rollbackInitialise(targetDir, previousDir, installedNames, movedPrevious, targetExisted);
+    } catch (rollbackError) {
+      const failure = new Error(
+        `Initialisation failed and automatic restoration was incomplete. Recovery files remain at ${previousDir}. ` +
+        `Original error: ${error.message}. Restoration error: ${rollbackError.message}`,
+      );
+      failure.recoveryDirectory = previousDir;
+      throw failure;
+    }
+    throw new Error(`Initialisation failed before completion; the original target contents were restored. ${error.message}`);
+  }
 }
 
 async function initialise(target = '.', options = {}) {
   const cwd = process.cwd();
   const useCurrentDir = isCurrentDirTarget(target);
   const resolvedTargetDir = useCurrentDir ? cwd : path.resolve(cwd, target);
-  const tempDir = path.join(resolvedTargetDir, '.sc-core-install');
+  let transactionRoot = null;
+  let retainTransaction = false;
 
   try {
     assertSafeTargetDirectory(resolvedTargetDir, cwd);
     printGitHubDevelopmentWarning();
-    if (!useCurrentDir) {
-      const targetExists = await pathExists(resolvedTargetDir);
-      if (!targetExists) {
-        await fs.mkdir(resolvedTargetDir, { recursive: true });
-        console.log(`\x1b[34mCreated target directory: ${resolvedTargetDir}\x1b[0m`);
-      }
-    }
 
-    console.log(`\x1b[34mInitialising in directory: ${resolvedTargetDir} \x1b[0m`);
+    const targetExisted = await pathExists(resolvedTargetDir);
+    const targetEntries = targetExisted ? await fs.readdir(resolvedTargetDir, { withFileTypes: true }) : [];
+    const hasGitDir = targetEntries.some(entry => entry.name === '.git');
+    const hasContentToReplace = targetEntries.some(entry => entry.name !== '.git');
 
-    if (useCurrentDir) {
+    if (useCurrentDir || hasGitDir || hasContentToReplace) {
       await promptYesOnly(
-        '\x1b[41m\x1b[97mWARNING:\x1b[0m\x1b[33m I will erase EVERYTHING in this directory except the .git directory. Do you wish to continue? Type Y to confirm: \x1b[0m'
+        '\x1b[41m\x1b[97mWARNING:\x1b[0m\x1b[33m Existing contents except .git will be replaced only after Core has downloaded and prepared successfully. Type Y to confirm: \x1b[0m',
       );
-    } else {
-      const hasGitDir = await pathExists(path.join(resolvedTargetDir, '.git'));
-      const targetEntries = await fs.readdir(resolvedTargetDir, { withFileTypes: true });
-      const hasContentToWipe = targetEntries.some(entry => entry.name !== '.git');
-      if (hasGitDir || hasContentToWipe) {
-        await promptYesOnly(
-          '\x1b[41m\x1b[97mWARNING:\x1b[0m\x1b[33m Target directory is not empty and its contents (except .git) will be erased. Do you wish to continue? Type Y to confirm: \x1b[0m'
-        );
-      }
     }
 
-    await removeAllExceptGit(resolvedTargetDir);
-    console.log('\x1b[34mRemoved all files and dirs except .git...\x1b[0m');
+    const parentDir = path.dirname(resolvedTargetDir);
+    await fs.mkdir(parentDir, { recursive: true });
+    transactionRoot = await fs.mkdtemp(path.join(parentDir, `.${path.basename(resolvedTargetDir)}.supacharger-init-`));
+    const preparedDir = path.join(transactionRoot, 'prepared');
+    const previousDir = path.join(transactionRoot, 'previous');
+    await fs.mkdir(previousDir);
 
+    console.log(`\x1b[34mPreparing Core outside the target directory: ${preparedDir}\x1b[0m`);
+    await gitClone(CORE_SSH_URL, preparedDir);
+    const { stdout: commitHash } = await execCommand('git rev-parse HEAD', { cwd: preparedDir });
+    await prepareStarter(preparedDir);
+    await removeGitDir(preparedDir);
+    await writeCoreLock(preparedDir, commitHash.trim());
+
+    console.log(`\x1b[34mInstalling prepared Core into: ${resolvedTargetDir}\x1b[0m`);
     try {
-      await fs.access(tempDir);
-      console.log(`Removing existing temporary folder: ${tempDir}`);
-      await fs.rm(tempDir, { recursive: true, force: true });
-    } catch {
-      // tempDir does not exist, no action needed
+      await installPreparedStarter(preparedDir, resolvedTargetDir, previousDir, targetExisted);
+    } catch (error) {
+      retainTransaction = Boolean(error.recoveryDirectory);
+      throw error;
     }
 
-    console.log(`\x1b[34mCreating temporary dir '${tempDir}'...\x1b[0m`);
-    await gitClone(CORE_SSH_URL, tempDir);
+    await fs.rm(transactionRoot, { recursive: true, force: true });
+    transactionRoot = null;
 
-    console.log('Done.');
-
-    const { stdout: commitHash } = await execCommand('git rev-parse HEAD', { cwd: tempDir });
-    const trimmedHash = commitHash.trim();
-
-    await prepareStarter(tempDir);
-    await removeGitDir(tempDir);
-
-    await writeCoreLock(tempDir, trimmedHash);
-
-    console.log('\x1b[34mMoving files from temporary folder into target directory...\x1b[0m');
-    await moveAllFilesForce(tempDir, resolvedTargetDir);
-  
     if (!options.skipSkills && process.stdin.isTTY && process.stdout.isTTY) {
       try {
         await require('./skills/installer.cjs').runSkills([], { root: resolvedTargetDir });
@@ -215,16 +199,24 @@ async function initialise(target = '.', options = {}) {
       }
     }
 
-    console.log('\x1b[32m✓ Initialise completed successfully. You should now commit changes to your main branch.\x1b[0m');
-  } catch (err) {
-    if (err.message === 'Cancelled by user') {
+    console.log('\x1b[32m✓ Initialise completed successfully. Review and commit the new application files.\x1b[0m');
+  } catch (error) {
+    if (transactionRoot && !retainTransaction) {
+      await fs.rm(transactionRoot, { recursive: true, force: true }).catch(() => {});
+    }
+    if (error.message === 'Cancelled by user') {
       console.log('\x1b[34mOperation cancelled by user.\x1b[0m');
       process.exit(0);
     }
-    console.error('Error during initialise:', err);
+    console.error('Error during initialise:', error);
     process.exit(1);
   }
 }
 
 module.exports = initialise;
-module.exports.testHelpers = { assertSafeTargetDirectory, isCurrentDirTarget };
+module.exports.testHelpers = {
+  assertSafeTargetDirectory,
+  installPreparedStarter,
+  isCurrentDirTarget,
+  rollbackInitialise,
+};
