@@ -539,6 +539,16 @@ async function assessAccountAlignmentConfig(rootDir) {
       missing.push(`ORGANISATIONS.${key}`);
     }
   }
+  if (objectBlockBounds(source, 'ORGANISATIONS')) {
+    const organisationBounds = objectBlockBounds(source, 'ORGANISATIONS');
+    const organisationSource = source.slice(organisationBounds.open, organisationBounds.close + 1);
+    if (/CHOOSER_PATH\s*:\s*(['"])\/account\/organisation\1/.test(organisationSource)) {
+      missing.push('ORGANISATIONS.CHOOSER_PATH');
+    }
+    if (/ROUTE_MODE\s*:\s*(['"])root-handle\1/.test(organisationSource)) {
+      missing.push('ORGANISATIONS.ROUTE_MODE');
+    }
+  }
   if (missingObjectKeys(source, 'BILLING', ['ACCOUNT_SUBJECTS']).length > 0) {
     missing.push('BILLING.ACCOUNT_SUBJECTS');
   }
@@ -575,19 +585,24 @@ async function migrateAccountAlignmentConfig(rootDir, options = {}) {
     source = insertTopLevelBlock(source, 'BILLING_ACCESS', `ORGANISATIONS: {
   ENABLED: false,
   AUTHENTICATION_HANDLE: 'disabled',
-  CHOOSER_PATH: '/account/organisation',
-  ROUTE_MODE: 'root-handle',
+  CHOOSER_PATH: '/organisation/choose',
+  ROUTE_MODE: 'organisation-handle',
   PROFILE_MEDIA: true,
 },`);
   } else {
     source = insertObjectEntries(source, 'ORGANISATIONS', [
       ['ENABLED', 'ENABLED: false,'],
       ['AUTHENTICATION_HANDLE', "AUTHENTICATION_HANDLE: 'disabled',"],
-      ['CHOOSER_PATH', "CHOOSER_PATH: '/account/organisation',"],
-      ['ROUTE_MODE', "ROUTE_MODE: 'root-handle',"],
+      ['CHOOSER_PATH', "CHOOSER_PATH: '/organisation/choose',"],
+      ['ROUTE_MODE', "ROUTE_MODE: 'organisation-handle',"],
       ['PROFILE_MEDIA', 'PROFILE_MEDIA: true,'],
     ]);
   }
+  const organisationBounds = objectBlockBounds(source, 'ORGANISATIONS');
+  const organisationSource = source.slice(organisationBounds.open, organisationBounds.close + 1)
+    .replace(/(CHOOSER_PATH\s*:\s*)(['"])\/account\/organisation\2/g, "$1'/organisation/choose'")
+    .replace(/(ROUTE_MODE\s*:\s*)(['"])root-handle\2/g, "$1'organisation-handle'");
+  source = source.slice(0, organisationBounds.open) + organisationSource + source.slice(organisationBounds.close + 1);
   source = insertObjectEntries(source, 'BILLING', [
     ['ACCOUNT_SUBJECTS', `ACCOUNT_SUBJECTS: {
   PERSONAL: true,
@@ -595,7 +610,7 @@ async function migrateAccountAlignmentConfig(rootDir, options = {}) {
 },`],
   ]);
   await fs.writeFile(configPath, source, 'utf8');
-  console.log(`\x1b[34mAdded disabled-safe account alignment configuration defaults: ${missing.join(', ')}.\x1b[0m`);
+  console.log(`\x1b[34mAligned account configuration: ${missing.join(', ')}.\x1b[0m`);
   return missing;
 }
 

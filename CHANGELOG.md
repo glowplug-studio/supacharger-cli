@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Core updates migrate the previous canonical organisation chooser and route-mode values to `/organisation/choose` and `organisation-handle`, including preview and recovery-copy handling. Developer-owned navigation and return URLs require manual alignment.
+
 ## [1.1.0] - 2026-09-14
 
 ### Added
