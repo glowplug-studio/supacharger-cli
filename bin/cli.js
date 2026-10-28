@@ -2,6 +2,7 @@
 
 const { Command } = require('commander');
 const registerSkills = require('../commands/skills');
+const registerExtensions = require('../commands/extensions');
 const { runCoreDevelopment } = require('../commands/coredev');
 const initialiseCommand = require('../commands/initialise');
 const coreupdateCommand = require('../commands/coreupdate');
@@ -17,6 +18,7 @@ program
 
 
 registerSkills(program);
+registerExtensions(program);
 
 const coredev = program
   .command('coredev')

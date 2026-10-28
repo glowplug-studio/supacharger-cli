@@ -120,4 +120,31 @@ The upstream Core `.gitignore` excludes its local skill installations. Initialis
 
 Initial setup copies the tracked `public/images/email-template/email-logo.png` from Core. This directory is developer-owned: replace the logo and commit it. `coreupdate` preserves it and does not install missing email branding files.
 
-Core updates configure `[functions.profile-media]` with `verify_jwt = false`. The function validates media paths and enforces caller-scoped Storage RLS. Deploy the managed `profile-media` function and set `internal.profile_media_settings.supabase_url` to the project origin after applying the profile migration.
+## Reviewed local extension bundles
+
+This CLI source includes `supacharger extension install <id> --source <directory> [--plan]` and `supacharger extension doctor <id>`. It copies files from a reviewed repository or extracted bundle; it does not download private releases or implement entitlement checks. Check installed CLI help before using these commands with an older npm release.
+
+Schema 3 maps `payload/app/` into `src/app/(project)/(extensions)/(sc_extensions)/(<id>)/`, `payload/supabase/shared/` into `supabase/functions/_shared/extensions/sc_ext-<id>/`, namespaced function payloads into `supabase/functions/`, and forward SQL into the flat `supabase/migrations/` directory. `payload/docs/` maps to `docs/extensions/<id>/` and must include INSTALL.md. Source and target paths must match the canonical mapping.
+
+The manifest uses `name: supacharger-ext-<id>` and marks the app-root config file `supacharger-ext-<id>.config.ts` with `kind: config`; this file is installed only when missing and preserved on update. Other files remain hash-verified; migration bytes remain immutable. Core's `tools/supacharger-extensions/installer.cjs` is canonical and must remain byte-identical to `commands/extensions/installer.cjs`.
+
+Installation does not apply migrations, seed databases, deploy functions, set secrets, load translations or implement enablement. The CLI checks literal provider configuration, dependencies and optional registry source checksums before writing. Never infer operational readiness from file integrity alone.
+
+Core updates configure the managed `profile-media` Edge Function for public requests. The function still authorises every image through caller-scoped Storage RLS. Set the environment-specific database media origin and coordinate breaking profile RPC upgrades with application releases; see Core’s profile extension guidance.
+
+## Local release comparison
+
+Versioned ZIP fetching is **coming soon**. Use reviewed local source folders with a CLI build containing these commands:
+
+```sh
+supacharger extension install supacharger-ext-brevo --source /path/to/release --plan
+supacharger extension update supacharger-ext-brevo --source /path/to/new-release --baseline-source /path/to/original-release --plan
+```
+
+Remove `--plan` to apply a clean update. The original manifest must match the installed record. The CLI compares actual installed managed files with the original payload; local differences stop replacement. In an interactive terminal it offers to retain the two payloads and an AI comparison prompt. Only Yes creates review files; No changes neither the installation nor its record. Non-interactive runs stop rather than prompt. Developer config is preserved; migrations and removed destinations retain their existing safeguards. Existing `brevo-email` installations need a separate ownership/path transition.
+
+Retained review files go under `.supacharger/extension-comparisons/<registry-name>/<version>-<unique-id>/`, with `original/`, `incoming/` and `agent-prompt.md`. Copies contain the manifest and installable payload. Keep this directory excluded from Git, deployment uploads and Next.js tracing. The CLI requires explicit `.gitignore` and `.vercelignore` entries before retention. Review does not apply a merge or advance the installed version.
+
+Optional `--registry /path/to/registry.json` verifies an incoming release against schema-1 registry metadata and checks fixed and configured-provider dependencies. Registry verification currently requires a local Git checkout containing the exact source commit; extracted archives are supported only in explicitly reviewed local-source mode until archive verification/fetching is implemented. `--baseline-registry` may additionally verify the original release. Without `--registry`, the result reports `registryVerified: false`: payload hashes are checked, but no registry authenticity claim is made.
+
+Dependency inspection uses the installed manifest as a file inventory and checks the actual files. A missing record means the CLI cannot verify a manually installed dependency; it does not prove the source is absent. Modified dependencies require review. Configured-provider dependencies require only the selected provider's extensions. Selection reads the installed developer config when present, otherwise the incoming starter config. Unsupported selections and disabled/missing/modified dependencies stop installation. No service is contacted, SQL applied, function deployed or email sent by these operations.

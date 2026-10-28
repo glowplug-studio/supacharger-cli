@@ -68,5 +68,19 @@
   },
   "ApplicationCleanup": {
     "RemovedTestScript": "  REMOVE TEST SCRIPT {name}"
+  },
+  "ExtensionsCli": {
+    "Description": "Install and inspect reviewed local extension bundles",
+    "Install": "Copy a reviewed local bundle into its declared project destinations",
+    "Source": "Local extension repository or extracted bundle directory",
+    "Root": "Target Supacharger application directory",
+    "Plan": "Validate and show file writes without changing the project",
+    "Doctor": "Verify installed extension files; configuration and deployment are not checked",
+    "Update": "Compare original and incoming local releases, then update unchanged installed files",
+    "BaselineSource": "Local source directory for the original installed release",
+    "Registry": "Local registry JSON snapshot for incoming release verification",
+    "BaselineRegistry": "Optional original-release registry snapshot",
+    "ReviewQuestion": "This extension has local changes and cannot be updated automatically. Prepare source copies and an AI comparison prompt? [y/N] ",
+    "Downloads": "Versioned ZIP downloads are coming soon; use local source directories."
   }
 }
