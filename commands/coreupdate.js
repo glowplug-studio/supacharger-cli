@@ -52,6 +52,7 @@ const DEVELOPER_STARTERS = [
   '.agents/project/AGENTS.md',
   'CHANGELOG.project.md',
   IMAGE_LOADER_FILE,
+  path.join('src', 'supacharger.adapters', 'media', 'image-targets.ts'),
   PROJECT_TAILWIND_CONFIG_FILE,
   path.join('src', 'supacharger.adapters', 'request-guard.ts'),
   AUTH_STYLES_FILE,
@@ -1546,6 +1547,20 @@ async function moveFiles(updateDir, rootDir, preservedPaths = [], managedPaths =
 }
 
 async function installMissingDeveloperStarters(updateDir, rootDir, relativePaths = DEVELOPER_STARTERS) {
+  // Preserve customised image policies when upgrading to server-authorised uploads.
+  const policyPath = path.join('src', 'supacharger.adapters', 'media', 'image-targets.ts');
+  const sourcePolicy = path.join(updateDir, policyPath);
+  const targetPolicy = path.join(rootDir, policyPath);
+  const legacyPolicy = path.join(rootDir, 'supabase', 'functions', '_shared', 'image-targets.ts');
+  if (await fs.stat(sourcePolicy).then(() => true, () => false) &&
+      !await fs.stat(targetPolicy).then(() => true, () => false) &&
+      await fs.stat(legacyPolicy).then(() => true, () => false)) {
+    const policy = await fs.readFile(legacyPolicy, 'utf8');
+    const migrated = policy.replace(/(['"])\.\/image-target-contract\.ts\1/g, "'../../../supabase/functions/_shared/image-target-contract'");
+    await fs.mkdir(path.dirname(targetPolicy), { recursive: true });
+    await fs.writeFile(targetPolicy, "import 'server-only';\n\n" + migrated);
+    // Retain the original developer-owned file for review; the new processor does not import it.
+  }
   const installed = [];
   const references = relativePaths === DEVELOPER_STARTERS
     ? (await walkFiles(updateDir)).filter((file) => file.startsWith(`docs${path.sep}agents${path.sep}`) && file.endsWith('.md'))
