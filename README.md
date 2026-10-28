@@ -119,3 +119,5 @@ The upstream Core `.gitignore` excludes its local skill installations. Initialis
 ### Email branding
 
 Initial setup copies the tracked `public/images/email-template/email-logo.png` from Core. This directory is developer-owned: replace the logo and commit it. `coreupdate` preserves it and does not install missing email branding files.
+
+Core updates configure `[functions.profile-media]` with `verify_jwt = false`. The function validates media paths and enforces caller-scoped Storage RLS. Deploy the managed `profile-media` function and set `internal.profile_media_settings.supabase_url` to the project origin after applying the profile migration.

@@ -464,6 +464,31 @@ async function migrateImageFunctionConfig(rootDir, options = {}) {
   return ['functions.process-image-upload.static_files'];
 }
 
+async function migrateProfileMediaFunctionConfig(rootDir, options = {}) {
+  const configPath = path.join(rootDir, 'supabase', 'config.toml');
+  let source;
+  try { source = await fs.readFile(configPath, 'utf8'); }
+  catch (error) { if (error?.code === 'ENOENT') return []; throw error; }
+  const bounds = tomlSectionBounds(source, 'functions.profile-media');
+  const section = bounds ? source.slice(bounds.start, bounds.end) : '';
+  if (/^verify_jwt\s*=\s*false\s*$/m.test(section)) return [];
+  const changes = ['functions.profile-media.verify_jwt'];
+  if (options.plan === true) return changes;
+  if (options.backup !== false) await backupConflicts(rootDir, rootDir, ['supabase/config.toml']);
+  let migrated;
+  if (!bounds) {
+    migrated = `${source.replace(/\s*$/, '')}\n\n[functions.profile-media]\nverify_jwt = false\n`;
+  } else {
+    const next = /^verify_jwt\s*=.*$/m.test(section)
+      ? section.replace(/^verify_jwt\s*=.*$/m, 'verify_jwt = false')
+      : `${section.replace(/\s*$/, '')}\nverify_jwt = false\n`;
+    migrated = `${source.slice(0, bounds.start)}${next}${source.slice(bounds.end)}`;
+  }
+  await fs.writeFile(configPath, migrated, 'utf8');
+  if (!options.quiet) console.log('Configured public profile media; the function enforces caller-scoped Storage RLS.');
+  return changes;
+}
+
 function objectBlockBounds(source, objectName) {
   const match = new RegExp(`\\b${objectName}\\s*:`).exec(source);
   if (!match) return null;
@@ -1190,7 +1215,12 @@ async function matchesSupportedSupabaseConfigChange(baselineContent, latestConte
       await fs.rm(path.join(tempRoot, 'supabase'), { recursive: true, force: true });
       await fs.mkdir(path.join(tempRoot, 'supabase'), { recursive: true });
       await fs.writeFile(path.join(tempRoot, 'supabase', 'config.toml'), source);
+      await migrateProfileMediaFunctionConfig(tempRoot, { backup: false, quiet: true });
+      if ((await fs.readFile(path.join(tempRoot, 'supabase', 'config.toml'))).equals(latestContent)) return true;
+      await fs.writeFile(path.join(tempRoot, 'supabase', 'config.toml'), source);
       await migrateImageFunctionConfig(tempRoot, { backup: false, quiet: true });
+      if ((await fs.readFile(path.join(tempRoot, 'supabase', 'config.toml'))).equals(latestContent)) return true;
+      await migrateProfileMediaFunctionConfig(tempRoot, { backup: false, quiet: true });
       const migrated = await fs.readFile(path.join(tempRoot, 'supabase', 'config.toml'));
       if (migrated.equals(latestContent)) return true;
     }
@@ -1655,6 +1685,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     migrateLegacyMfaConfig(rootDir, { plan: true }),
     migrateLocalTotpConfig(rootDir, { plan: true }),
     migrateImageFunctionConfig(rootDir, { plan: true }),
+    migrateProfileMediaFunctionConfig(rootDir, { plan: true }),
     migrateRootDocumentConfig(rootDir, { plan: true }),
     migrateSessionTransferConfig(rootDir, { plan: true }),
     migrateSignUpTermsConfig(rootDir, { plan: true }),
@@ -1899,6 +1930,7 @@ Enter Y to continue: \u001b[0m`;
       await migrateLegacyMfaConfig(cwd);
       await migrateLocalTotpConfig(cwd);
       await migrateImageFunctionConfig(cwd);
+      await migrateProfileMediaFunctionConfig(cwd);
       await migrateAuthProviderConfig(cwd);
       await migrateRootDocumentConfig(cwd);
       await migrateAccountAlignmentConfig(cwd);
@@ -2012,6 +2044,7 @@ Enter Y to continue: \u001b[0m`;
     await migrateLegacyMfaConfig(cwd);
     await migrateLocalTotpConfig(cwd);
     await migrateImageFunctionConfig(cwd);
+    await migrateProfileMediaFunctionConfig(cwd);
     await migrateAuthProviderConfig(cwd);
     await migrateRootDocumentConfig(cwd);
     await migrateAccountAlignmentConfig(cwd);
@@ -2059,6 +2092,7 @@ coreupdate.testHelpers = {
   migrateLegacyMfaConfig,
   migrateLocalTotpConfig,
   migrateImageFunctionConfig,
+  migrateProfileMediaFunctionConfig,
   migrateLegacyConfig,
   migrateLegacyPostcssConfig,
   migrateLegacyProjectStyles,
