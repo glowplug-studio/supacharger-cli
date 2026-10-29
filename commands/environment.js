@@ -22,22 +22,29 @@ function generateSecret() {
 }
 
 function namespaceReplacement(source, namespace, configPath) {
+  if (typeof namespace !== 'string' || (namespace !== '' && !/^[a-z][a-z0-9_]{0,5}$/.test(namespace))) throw new Error(copy.NamespaceInvalid);
   const sourceFile = ts.createSourceFile(configPath, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const declaration = sourceFile.statements
     .filter(ts.isVariableStatement)
     .flatMap(statement => statement.declarationList.declarations)
     .find(item => ts.isIdentifier(item.name) && item.name.text === 'SC_CONFIG');
   if (!declaration || !declaration.initializer || !ts.isObjectLiteralExpression(declaration.initializer)) {
-    throw new Error(copy.NamespaceConfigMissing.replace('{path}', configPath));
+    const error = new Error(copy.NamespaceConfigMissing.replace('{path}', configPath));
+    error.code = 'PROJECT_NAMESPACE_MISSING';
+    throw error;
   }
   const properties = declaration.initializer.properties.filter(property =>
     ts.isPropertyAssignment(property) &&
     ((ts.isIdentifier(property.name) && property.name.text === 'PROJECT_NAMESPACE') ||
       (ts.isStringLiteral(property.name) && property.name.text === 'PROJECT_NAMESPACE'))
   );
-  if (properties.length !== 1) throw new Error(copy.NamespaceConfigMissing.replace('{path}', configPath));
+  if (properties.length !== 1) {
+    const error = new Error(copy.NamespaceConfigMissing.replace('{path}', configPath));
+    error.code = 'PROJECT_NAMESPACE_MISSING';
+    throw error;
+  }
   const initializer = properties[0].initializer;
-  const value = namespace ? `'${namespace}'` : 'null';
+  const value = `'${namespace}'`;
   return `${source.slice(0, initializer.getStart(sourceFile))}${value}${source.slice(initializer.end)}`;
 }
 
@@ -45,7 +52,7 @@ async function configureProjectNamespace(root, prompts) {
   console.log(`\n${colour(copy.NamespaceHeading, 'cyan')}`);
   const namespace = (await prompts.input({
     message: copy.NamespacePrompt,
-    validate: answer => !answer.trim() || /^[a-z][a-z0-9_]{0,19}$/.test(answer.trim()) || copy.NamespaceInvalid,
+    validate: answer => !answer.trim() || /^[a-z][a-z0-9_]{0,5}$/.test(answer.trim()) || copy.NamespaceInvalid,
   })).trim();
   const configPath = path.join(root, 'src', 'supacharger.config.ts');
   const source = await fs.readFile(configPath, 'utf8');
@@ -54,7 +61,7 @@ async function configureProjectNamespace(root, prompts) {
   console.log(namespace
     ? copy.NamespaceSet.replace('{namespace}', namespace)
     : copy.NamespaceSkipped);
-  return namespace || null;
+  return namespace;
 }
 
 function replaceEnvironmentValue(source, name, value) {
@@ -65,7 +72,7 @@ function replaceEnvironmentValue(source, name, value) {
   return `${source.replace(/\s*$/, '')}\n${line}\n`;
 }
 
-async function promptEnvironmentValues(prompts) {
+async function promptEnvironmentValues(prompts, imageSecretName = 'SC_IMAGE_UPLOAD_SIGNING_SECRET') {
   const values = {};
 
   console.log(`\n${colour(copy.SupabaseHeading, 'lime')}`);
@@ -101,13 +108,13 @@ async function promptEnvironmentValues(prompts) {
   console.log(`\n${colour(copy.ApplicationHeading, 'cyan')}`);
   values.NEXT_PUBLIC_SITE_URL = await prompts.input({
     message: copy.SiteUrl,
-    default: 'http://localhost:3400',
+    default: 'http://localhost:3000',
   });
   values.NEXT_PUBLIC_GOOGLE_ANALYTICS_ID = await prompts.input({
     message: copy.GoogleAnalyticsId,
     default: '',
   });
-  values.IMAGE_UPLOAD_SIGNING_SECRET = generateSecret();
+  values[imageSecretName] = generateSecret();
   console.log(copy.ImageSigningSecret);
 
   return values;
@@ -125,10 +132,6 @@ async function loadPrompts() {
 async function configureEnvironment(root, options = {}) {
   const examplePath = path.join(root, '.env.local.example');
   const destinationPath = path.join(root, '.env.local');
-  const prompts = options.prompts ?? await loadPrompts();
-
-  await configureProjectNamespace(root, prompts);
-
   try {
     await fs.access(destinationPath);
     console.log(copy.Existing.replace('{path}', destinationPath));
@@ -136,6 +139,13 @@ async function configureEnvironment(root, options = {}) {
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
+
+  // Resolve the naming contract before saving a choice. Never create secrets
+  // under a default prefix after namespace configuration has failed.
+  const { resourceName } = require(path.join(root, 'src/supacharger/namespace.cjs'));
+  const prompts = options.prompts ?? await loadPrompts();
+  const namespace = await configureProjectNamespace(root, prompts);
+  const imageSecretName = resourceName(namespace, 'image_upload_signing_secret', 'secret');
 
   let contents;
   try {
@@ -145,7 +155,8 @@ async function configureEnvironment(root, options = {}) {
     throw error;
   }
 
-  const values = await promptEnvironmentValues(prompts);
+  contents = contents.replace(/^(?:SC_)?IMAGE_UPLOAD_SIGNING_SECRET=/m, `${imageSecretName}=`);
+  const values = await promptEnvironmentValues(prompts, imageSecretName);
   for (const [name, value] of Object.entries(values)) {
     if (!value.trim()) continue;
     contents = replaceEnvironmentValue(contents, name, value.trim());

@@ -10,6 +10,10 @@ Developer CLI for installing and safely updating Supacharger applications.
 
 `supacharger version` walks upwards from the current directory to the nearest `.supacharger/core-lock.json` and prints its installed Core release version. The registry-based installer writes the release version and exact source commit into this lock. Use `supacharger --version` for the CLI package version.
 
+This CLI supports Core `>=0.0.1-alpha <0.0.2`, including `0.0.1` prereleases. Every application command checks the nearest `.supacharger/core-lock.json` before running. Initialisation checks the registry release before preparing files; Core updates and doctor also check the incoming registered release. Missing, invalid or unsupported versions stop the command and display `npm install -g @glowplug/supacharger-cli@latest`. Help and `supacharger --version` remain available without an installation.
+
+Core updates default to the current registered release. An explicit `--ref` accepts a registered version, tag or full commit, including historical releases; unregistered branches and local source commits are rejected. Updates retain both the release version and commit in the lock.
+
 ## Optional Core contributor instructions
 
 These private instructions are inert and absent from ordinary application use. They are not installed by `init`, `coreupdate`, `doctor`, `skills`, or a normal non-recursive clone.

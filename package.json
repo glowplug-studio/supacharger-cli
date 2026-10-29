@@ -11,8 +11,10 @@
     "@inquirer/confirm": "6.3.5",
     "@inquirer/input": "5.1.9",
     "@inquirer/password": "5.2.5",
+    "@inquirer/select": "5.2.8",
     "adm-zip": "0.6.1",
     "commander": "15.0.0",
+    "semver": "7.8.5",
     "typescript": "5.9.3",
     "yaml": "2.9.1"
   },
@@ -20,7 +22,7 @@
     "supacharger": "bin/cli.js"
   },
   "scripts": {
-    "check": "node --check bin/cli.js && node --check commands/coredev.js && node --check commands/coreupdate.js && node --check commands/doctor.js && node --check commands/environment.js && node --check commands/initialise.js && node --check commands/version.js && node --test",
+    "check": "node --check bin/cli.js && node --check commands/coredev.js && node --check commands/coreupdate.js && node --check commands/doctor.js && node --check commands/environment.js && node --check commands/initialise.js && node --check commands/setup-preview.js && node --check commands/version.js && node --test",
     "test": "node --test"
   },
   "keywords": [

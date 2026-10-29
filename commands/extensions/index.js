@@ -5,6 +5,13 @@ const { doctor } = require('./installer.cjs');
 const { runExtension, normaliseId } = require('./update.cjs');
 const { loadExtensionRegistry, REGISTRY_MANIFEST_URL, versionPattern } = require('./registry.cjs');
 const copy = require('../../messages/en.json').ExtensionsCli;
+const DEFAULT_EXTENSION = 'supacharger-ext-transactional-email';
+
+function extensionName(name) {
+  return process.stdout.isTTY && !process.env.NO_COLOR
+    ? `\x1b[93m${name}\x1b[0m`
+    : name;
+}
 
 function installedLabel() {
   return process.stdout.isTTY && !process.env.NO_COLOR
@@ -40,8 +47,9 @@ async function selectAvailableExtensions({ root = process.cwd(), registry = REGI
   const selected = await checkbox({
     message: copy.InitialisePrompt,
     choices: names.map(name => ({
-      name: `${name}${installed.has(name) ? ` ${installedLabel()}` : ''}`,
+      name: `${extensionName(name)}${installed.has(name) ? ` ${installedLabel()}` : ''}`,
       value: name,
+      checked: name === DEFAULT_EXTENSION,
     })),
     required: false,
   });
@@ -59,7 +67,7 @@ function registerExtensions(program) {
       const root = path.resolve(options.root || process.cwd());
       const installed = await installedExtensions(root, names);
       names.forEach((name, index) => {
-        console.log(`[${index + 1}] ${name}${installed.has(name) ? ` ${installedLabel()}` : ''}`);
+        console.log(`[${index + 1}] ${extensionName(name)}${installed.has(name) ? ` ${installedLabel()}` : ''}`);
       });
       if (!process.stdin.isTTY || !process.stdout.isTTY || names.length === 0) return;
 

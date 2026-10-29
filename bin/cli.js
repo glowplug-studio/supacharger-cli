@@ -10,7 +10,9 @@ const doctorCommand = require('../commands/doctor');
 const { printCoreVersion } = require('../commands/version');
 const { version } = require('../package.json');
 
+const { checkCommandCompatibility } = require('../commands/common/core-compatibility');
 const program = new Command();
+program.hook('preAction', async (_program, command) => checkCommandCompatibility(command));
 
 program
   .name('supacharger')
@@ -42,14 +44,14 @@ program
   .command('coreupdate')
   .description('Update from an immutable Supacharger Core ref and check for local conflicts')
   .option('--plan', 'Show managed writes, removals, dependencies and migrations without changing the project')
-  .option('--ref <tag-or-commit>', 'Core tag, branch, or commit to install', 'main')
+  .option('--ref <tag-or-commit>', 'Registered Core version, tag or commit to install')
   .option('--source <path>', 'Maintainer-only local Core checkout source')
   .action((options) => coreupdateCommand(options));
 
 program
   .command('doctor')
   .description('Compare local managed files and configuration with installed and incoming Core')
-  .option('--ref <tag-or-commit>', 'Core tag, branch, or commit to inspect', 'main')
+  .option('--ref <tag-or-commit>', 'Registered Core version, tag or commit to inspect')
   .option('--source <path>', 'Maintainer-only local Core checkout source')
   .action((options) => doctorCommand(options));
 

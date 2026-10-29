@@ -15,6 +15,7 @@
 ### Changed
 
 - Initialisation now reports seven numbered stages in purple, explains destructive replacement in plain language, accepts explicit `Y` or `n`, and removes the development-only GitHub warning.
+- Initialisation now reports namespace-version incompatibility and unexpected failures without exposing internal stack traces.
 - Extension install and update commands now read the schema-2 registry manifest and its per-extension descriptors. Extensions without published release metadata remain explicitly registered but unverified during local-source review.
 - Core updates migrate the previous canonical organisation chooser and route-mode values to `/organisation/choose` and `organisation-handle`, including preview and recovery-copy handling. Developer-owned navigation and return URLs require manual alignment.
 

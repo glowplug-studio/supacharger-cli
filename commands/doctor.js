@@ -247,6 +247,9 @@ async function inspect(rootDir = process.cwd(), options = {}) {
 }
 
 async function doctor(options = {}) {
+  const { checkLocalCore, prepareCoreTarget } = require('./common/core-compatibility');
+  await checkLocalCore();
+  options = await prepareCoreTarget(options);
   try {
     const result = await inspect(process.cwd(), options);
     console.log(`Installed Core commit: ${result.installState.commit}`);

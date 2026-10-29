@@ -18,6 +18,7 @@ const namePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const idPattern = /^(general|supacharger|specdrive)\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const plain = value => typeof value === 'string' && value.trim() && value.length <= 1024 && !/[\x00-\x1f\x7f]/.test(value);
+const skillName = value => process.stdout.isTTY && !process.env.NO_COLOR ? `\x1b[95m${value}\x1b[0m` : value;
 async function git(cwd, args) {
   return (await exec('git', args, { cwd, encoding: 'buffer', maxBuffer: 12 * 1024 * 1024, timeout: 60000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout;
 }
@@ -215,7 +216,7 @@ async function runSkills(ids = [], options = {}) {
           const exists = Boolean(await stat(path.join(project.root, '.agents/skills', skill.name)));
           const record = project.lock.skills[skill.name];
           const status = exists ? (record ? message('InstalledStatus') : message('UntrackedStatus')) : message('MissingStatus');
-          choices.push({ name: `${skill.name} (${status})`, value: skill.id, description: skill.description, disabled: options.update ? (!exists || !record ? message('InstallFirst') : false) : (exists ? message('UseUpdate') : false) });
+          choices.push({ name: `${skillName(skill.name)} (${status})`, value: skill.id, description: skill.description, disabled: options.update ? (!exists || !record ? message('InstallFirst') : false) : (exists ? message('UseUpdate') : false) });
         }
       }
       ids = await checkbox({ message: options.update ? message('UpdatePrompt') : message('InstallPrompt'), choices, required: false });

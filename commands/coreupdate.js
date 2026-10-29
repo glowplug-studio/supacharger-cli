@@ -7,6 +7,7 @@ const { isDeepStrictEqual } = require('node:util');
 
 
 const { cleanScripts, isTestScript } = require('./common/test-distribution');
+const { checkLocalCore, prepareCoreTarget } = require('./common/core-compatibility');
 const cleanupMessages = require('../messages/en.json').ApplicationCleanup;
 
 const CORE_REPOSITORY = 'glowplug-studio/supacharger';
@@ -244,12 +245,12 @@ async function readInstallState(rootDir) {
     : null;
 }
 
-async function writeCoreLock(rootDir, commit) {
+async function writeCoreLock(rootDir, commit, version) {
   const lockPath = path.join(rootDir, CORE_LOCK_FILE);
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
   await fs.writeFile(
     lockPath,
-    `${JSON.stringify({ repository: CORE_REPOSITORY, commit }, null, 2)}\n`,
+    `${JSON.stringify({ repository: CORE_REPOSITORY, version, commit }, null, 2)}\n`,
     'utf8'
   );
 }
@@ -1822,6 +1823,8 @@ async function coreupdate(options = {}) {
 
   try {
     const cwd = process.cwd();
+    await checkLocalCore(cwd);
+    options = await prepareCoreTarget(options);
     const installState = await readInstallState(cwd);
     if (!installState) {
       console.error('\x1b[31mError: Supacharger installation metadata is missing. Aborting.\x1b[0m');
@@ -1971,7 +1974,7 @@ Enter Y to continue: \u001b[0m`;
       }
       await fs.rm(updateDir, { recursive: true, force: true });
       await verifyManagedFiles(cwd, latestManagedContents);
-      await writeCoreLock(cwd, targetCommit);
+      await writeCoreLock(cwd, targetCommit, options.coreVersion);
       await fs.rm(updateDir, { recursive: true, force: true });
       console.log('\x1b[32mUpdate complete and .sc-core-update folder removed.\x1b[0m');
       return;
@@ -2085,7 +2088,7 @@ Enter Y to continue: \u001b[0m`;
     }
     await fs.rm(updateDir, { recursive: true, force: true });
     await verifyManagedFiles(cwd, latestManagedContents);
-    await writeCoreLock(cwd, targetCommit);
+    await writeCoreLock(cwd, targetCommit, options.coreVersion);
 
     await fs.rm(updateDir, { recursive: true, force: true });
 

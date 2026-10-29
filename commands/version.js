@@ -13,7 +13,7 @@ async function findCoreLock(startDirectory = process.cwd()) {
       const lock = JSON.parse(await fs.readFile(lockPath, 'utf8'));
       if (
         typeof lock.repository !== 'string' || !lock.repository ||
-        typeof lock.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(lock.version) ||
+        typeof lock.version !== 'string' || !require('semver').valid(lock.version) ||
         typeof lock.commit !== 'string' || !/^[a-f0-9]{40}$/.test(lock.commit)
       ) throw new Error(copy.InvalidLock.replace('{path}', lockPath));
       return { directory, lock, lockPath };

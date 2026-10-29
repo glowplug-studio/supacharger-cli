@@ -7,27 +7,42 @@ const readline = require('readline');
 const AdmZip = require('adm-zip');
 
 const { prepareStarter } = require('./common/test-distribution');
+const { assertSupportedCore } = require('./common/core-compatibility');
 const { configureEnvironment } = require('./environment');
 const { selectAvailableExtensions } = require('./extensions');
 const { loadCoreDescriptor, readLocation, REGISTRY_MANIFEST_URL } = require('./extensions/registry.cjs');
+const { runSetupPreview } = require('./setup-preview');
 
-const INIT_BANNER = [
-  '    ▗▄▄▖▗▖ ▗▖▗▄▄▖  ▗▄▖  ▗▄▄▖▗▖ ▗▖ ▗▄▖ ▗▄▄▖  ▗▄▄▖▗▄▄▄▖▗▄▄▖ ',
-  '   ▐▌   ▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▐▌   ▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▐▌   ▐▌   ▐▌ ▐▌',
-  '    ▝▀▚▖▐▌ ▐▌▐▛▀▘ ▐▛▀▜▌▐▌   ▐▛▀▜▌▐▛▀▜▌▐▛▀▚▖▐▌▝▜▌▐▛▀▀▘▐▛▀▚▖',
-  '   ▗▄▄▞▘▝▚▄▞▘▐▌   ▐▌ ▐▌▝▚▄▄▖▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▝▚▄▞▘▐▙▄▄▖▐▌ ▐▌',
-].join('\n');
+const INIT_BANNER_PRIMARY = [
+  ' ▗▄▄▖▗▖ ▗▖▗▄▄▖  ▗▄▖  ▗▄▄▖▗▖ ▗▖ ▗▄▖ ▗▄▄▖  ▗▄▄▖▗▄▄▄▖▗▄▄▖',
+  '▐▌   ▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▐▌   ▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▐▌   ▐▌   ▐▌ ▐▌',
+  ' ▝▀▚▖▐▌ ▐▌▐▛▀▘ ▐▛▀▜▌▐▌   ▐▛▀▜▌▐▛▀▜▌▐▛▀▚▖▐▌▝▜▌▐▛▀▀▘▐▛▀▚▖',
+  '▗▄▄▞▘▝▚▄▞▘▐▌   ▐▌ ▐▌▝▚▄▄▖▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▝▚▄▞▘▐▙▄▄▖▐▌ ▐▌',
+];
+
+const INIT_BANNER_CLI = [
+  '  ▗▄▄▖▗▖   ▗▄▄▄▖',
+  '▐▌   ▐▌     █',
+  '▐▌   ▐▌     █',
+  '▝▚▄▄▖▐▙▄▄▖▗▄█▄▖',
+];
 
 function printInitialiseBanner() {
-  const banner = process.stdout.isTTY && !process.env.NO_COLOR
-    ? `\x1b[1;36m${INIT_BANNER}\x1b[0m`
-    : INIT_BANNER;
-  console.log(`${banner}\n`);
+  const colourEnabled = process.stdout.isTTY && !process.env.NO_COLOR;
+  const lines = INIT_BANNER_PRIMARY.map((primary, index) => colourEnabled
+    ? `\x1b[1;36m${primary}\x1b[0m \x1b[1;35m${INIT_BANNER_CLI[index]}\x1b[0m`
+    : `${primary} ${INIT_BANNER_CLI[index]}`
+  );
+  console.log(`${lines.join('\n')}\n`);
 }
 
 function printInitialiseStep(number, message) {
   const line = `[${number}/7] ${message}`;
   console.log(process.stdout.isTTY && !process.env.NO_COLOR ? `\x1b[35m${line}\x1b[0m` : line);
+}
+
+function dependencyStatus(text, colourCode) {
+  return process.stdout.isTTY && !process.env.NO_COLOR ? `\x1b[${colourCode}m${text}\x1b[0m` : text;
 }
 
 function execFileCommand(command, args, options = {}) {
@@ -41,6 +56,57 @@ function execFileCommand(command, args, options = {}) {
       resolve({ stdout, stderr });
     });
   });
+}
+
+async function inspectCommand(command, args = ['--version'], run = execFileCommand) {
+  try {
+    const { stdout, stderr } = await run(command, args);
+    return { available: true, version: (stdout || stderr || '').trim().split(/\r?\n/, 1)[0] };
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { available: false, version: '' };
+    return { available: false, version: '', reason: error?.message };
+  }
+}
+
+async function checkInitialiseDependencies(options = {}) {
+  const copy = require('../messages/en.json').InitialiseCli;
+  const run = options.run ?? execFileCommand;
+  const [npm, npx, git, docker, supabase] = await Promise.all([
+    inspectCommand('npm', ['--version'], run),
+    inspectCommand('npx', ['--version'], run),
+    inspectCommand('git', ['--version'], run),
+    inspectCommand('docker', ['--version'], run),
+    inspectCommand('supabase', ['--version'], run),
+  ]);
+  const dependencies = [
+    { ...npm, label: copy.DependencyNpm, missing: copy.DependencyNpmMissing },
+    { ...npx, label: copy.DependencyNpx, missing: copy.DependencyNpxMissing },
+    { ...git, label: copy.DependencyGit, missing: copy.DependencyGitMissing },
+    { ...docker, label: copy.DependencyDocker, missing: copy.DependencyDockerMissing },
+    { ...supabase, label: copy.DependencySupabase, missing: copy.DependencySupabaseMissing },
+  ];
+
+  console.log(`\n${copy.DependencyHeading}`);
+  console.log(`${dependencyStatus(copy.DependencyMet, '32')} ${copy.DependencyNode.replace('{version}', process.version)}`);
+  for (const dependency of dependencies) {
+    if (dependency.available) {
+      console.log(`${dependencyStatus(copy.DependencyMet, '32')} ${dependency.label}${dependency.version ? ` ${dependency.version}` : ''}`);
+    } else {
+      console.log(`${dependencyStatus(copy.DependencyNotMet, '33')} ${dependency.missing}`);
+    }
+  }
+
+  const missing = dependencies.filter(dependency => !dependency.available);
+  if (missing.length && process.stdin.isTTY && process.stdout.isTTY) {
+    const { default: confirm } = await import('@inquirer/confirm');
+    const proceed = await confirm({ message: `${copy.DependencyContinue}\n`, default: true });
+    if (!proceed) {
+      const error = new Error('Cancelled by user');
+      error.code = 'USER_CANCELLED';
+      throw error;
+    }
+  }
+  return { dependencies, missing };
 }
 
 function askQuestion(question) {
@@ -60,7 +126,7 @@ async function confirmReplacement(targetDir) {
   console.log(`\x1b[33m${copy.ReplacementTarget.replace('{path}', targetDir)}\x1b[0m`);
   console.log(copy.ReplacementDetail);
   while (true) {
-    const answer = await askQuestion(`${copy.ReplacementQuestion} `);
+    const answer = await askQuestion(`${copy.ReplacementQuestion}\n`);
     if (/^y$/i.test(answer)) return;
     if (/^n$/i.test(answer)) {
       const error = new Error('Cancelled by user');
@@ -73,6 +139,19 @@ async function confirmReplacement(targetDir) {
 
 function isPromptCancellation(error) {
   return error?.name === 'ExitPromptError' || error?.code === 'ABORT_ERR';
+}
+
+function initialiseFailureMessage(error, targetDir, coreInstalled) {
+  const copy = require('../messages/en.json').InitialiseCli;
+  if (error?.code === 'PROJECT_NAMESPACE_MISSING') {
+    return copy.NamespaceUnsupported
+      .replace('{path}', targetDir)
+      .replace('{status}', coreInstalled ? copy.CoreInstalledStatus : copy.CoreNotInstalledStatus);
+  }
+  if (typeof error?.message === 'string' && error.message.trim()) {
+    return copy.Failed.replace('{reason}', error.message.trim());
+  }
+  return copy.UnexpectedFailure;
 }
 
 async function removeGitDir(dir) {
@@ -291,6 +370,7 @@ async function initialise(target = '.', options = {}) {
   try {
     printInitialiseBanner();
     assertSafeTargetDirectory(resolvedTargetDir, cwd);
+    await checkInitialiseDependencies({ run: options.dependencyRun });
 
     const targetExisted = await pathExists(resolvedTargetDir);
     const targetEntries = targetExisted ? await fs.readdir(resolvedTargetDir, { withFileTypes: true }) : [];
@@ -303,6 +383,7 @@ async function initialise(target = '.', options = {}) {
     const copy = require('../messages/en.json').InitialiseCli;
     printInitialiseStep(1, copy.StepRegistry);
     const descriptor = await loadCoreDescriptor(options.registry, { fetch: options.fetch });
+    assertSupportedCore(descriptor.version);
     const repository = githubRepositorySlug(descriptor.github_repo_url);
 
     printInitialiseStep(2, copy.StepWorkspace);
@@ -352,6 +433,7 @@ async function initialise(target = '.', options = {}) {
         if (isPromptCancellation(error)) throw error;
         console.warn(copyInitialiseExtensionFailure(error.message));
       }
+      await runSetupPreview();
     }
 
     console.log('\x1b[32m✓ Initialise completed successfully. Review and commit the new application files.\x1b[0m');
@@ -368,8 +450,9 @@ async function initialise(target = '.', options = {}) {
       process.exitCode = error?.code === 'USER_CANCELLED' ? 0 : 130;
       return;
     }
-    console.error('Error during initialise:', error);
-    process.exit(1);
+    console.error(`\x1b[31m${initialiseFailureMessage(error, resolvedTargetDir, coreInstalled)}\x1b[0m`);
+    process.exitCode = 1;
+    return;
   }
 }
 
@@ -379,11 +462,14 @@ module.exports.testHelpers = {
   assertSafeTargetDirectory,
   checkoutCoreWithGit,
   confirmReplacement,
+  checkInitialiseDependencies,
   downloadCoreZip,
   extractCoreZip,
   gitAvailable,
   githubRepositorySlug,
   installPreparedStarter,
+  inspectCommand,
+  initialiseFailureMessage,
   isPromptCancellation,
   isCurrentDirTarget,
   printInitialiseBanner,
