@@ -4,7 +4,6 @@ const path = require('path');
 const ts = require('typescript');
 
 const coreupdate = require('./coreupdate');
-const { printGitHubDevelopmentWarning } = require('./common/github-development-warning');
 
 const {
   cloneAndCheckout,
@@ -249,7 +248,6 @@ async function inspect(rootDir = process.cwd(), options = {}) {
 
 async function doctor(options = {}) {
   try {
-    if (!options.source) printGitHubDevelopmentWarning();
     const result = await inspect(process.cwd(), options);
     console.log(`Installed Core commit: ${result.installState.commit}`);
     console.log(`Incoming Core commit:  ${result.targetCommit}`);

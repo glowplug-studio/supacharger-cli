@@ -1,39 +1,78 @@
-const { spawn, exec } = require('child_process');
+const { execFile } = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const readline = require('readline');
+const AdmZip = require('adm-zip');
 
-const { printGitHubDevelopmentWarning } = require('./common/github-development-warning');
 const { prepareStarter } = require('./common/test-distribution');
+const { configureEnvironment } = require('./environment');
+const { selectAvailableExtensions } = require('./extensions');
+const { loadCoreDescriptor, readLocation, REGISTRY_MANIFEST_URL } = require('./extensions/registry.cjs');
 
-const CORE_REPOSITORY = 'glowplug-studio/supacharger';
-const CORE_SSH_URL = `git@github.com:${CORE_REPOSITORY}.git`;
+const INIT_BANNER = [
+  '    ▗▄▄▖▗▖ ▗▖▗▄▄▖  ▗▄▖  ▗▄▄▖▗▖ ▗▖ ▗▄▖ ▗▄▄▖  ▗▄▄▖▗▄▄▄▖▗▄▄▖ ',
+  '   ▐▌   ▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▐▌   ▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▐▌   ▐▌   ▐▌ ▐▌',
+  '    ▝▀▚▖▐▌ ▐▌▐▛▀▘ ▐▛▀▜▌▐▌   ▐▛▀▜▌▐▛▀▜▌▐▛▀▚▖▐▌▝▜▌▐▛▀▀▘▐▛▀▚▖',
+  '   ▗▄▄▞▘▝▚▄▞▘▐▌   ▐▌ ▐▌▝▚▄▄▖▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▝▚▄▞▘▐▙▄▄▖▐▌ ▐▌',
+].join('\n');
 
-function execCommand(command, options = {}) {
+function printInitialiseBanner() {
+  const banner = process.stdout.isTTY && !process.env.NO_COLOR
+    ? `\x1b[1;36m${INIT_BANNER}\x1b[0m`
+    : INIT_BANNER;
+  console.log(`${banner}\n`);
+}
+
+function printInitialiseStep(number, message) {
+  const line = `[${number}/7] ${message}`;
+  console.log(process.stdout.isTTY && !process.env.NO_COLOR ? `\x1b[35m${line}\x1b[0m` : line);
+}
+
+function execFileCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = exec(command, options, (error, stdout, stderr) => {
+    execFile(command, args, { ...options, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) {
+        error.stderr = stderr;
         reject(error);
         return;
       }
       resolve({ stdout, stderr });
     });
-    child.stdout?.pipe(process.stdout);
-    child.stderr?.pipe(process.stderr);
   });
 }
 
-function promptYesOnly(question) {
+function askQuestion(question) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve, reject) => {
+  return new Promise(resolve => {
     rl.question(question, answer => {
       rl.close();
-      const trimmed = answer.trim();
-      if (trimmed === 'Y' || trimmed === 'y') resolve(true);
-      else reject(new Error('Cancelled by user'));
+      resolve(answer.trim());
     });
   });
+}
+
+async function confirmReplacement(targetDir) {
+  const copy = require('../messages/en.json').InitialiseCli;
+  const warning = `\x1b[41m\x1b[97m ${copy.ReplacementWarning} \x1b[0m`;
+  console.log(`\n${warning} ${copy.ReplacementIntroduction}`);
+  console.log(`\x1b[33m${copy.ReplacementTarget.replace('{path}', targetDir)}\x1b[0m`);
+  console.log(copy.ReplacementDetail);
+  while (true) {
+    const answer = await askQuestion(`${copy.ReplacementQuestion} `);
+    if (/^y$/i.test(answer)) return;
+    if (/^n$/i.test(answer)) {
+      const error = new Error('Cancelled by user');
+      error.code = 'USER_CANCELLED';
+      throw error;
+    }
+    console.log(copy.ReplacementInvalid);
+  }
+}
+
+function isPromptCancellation(error) {
+  return error?.name === 'ExitPromptError' || error?.code === 'ABORT_ERR';
 }
 
 async function removeGitDir(dir) {
@@ -42,17 +81,16 @@ async function removeGitDir(dir) {
     const stat = await fs.stat(gitPath);
     if (stat.isDirectory()) {
       await fs.rm(gitPath, { recursive: true, force: true });
-      console.log('\x1b[34mRemoved .git directory from prepared Core.\x1b[0m');
     }
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
 }
 
-async function writeCoreLock(rootDir, commit) {
+async function writeCoreLock(rootDir, repository, commit, version) {
   const lockPath = path.join(rootDir, '.supacharger', 'core-lock.json');
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
-  await fs.writeFile(lockPath, `${JSON.stringify({ repository: CORE_REPOSITORY, commit }, null, 2)}\n`, 'utf8');
+  await fs.writeFile(lockPath, `${JSON.stringify({ repository, version, commit }, null, 2)}\n`, 'utf8');
 }
 
 async function pathExists(targetPath) {
@@ -87,15 +125,113 @@ function assertSafeTargetDirectory(targetDir, cwd = process.cwd()) {
   }
 }
 
-function gitClone(repoUrl, targetDir) {
-  return new Promise((resolve, reject) => {
-    const gitProcess = spawn('git', ['clone', '--depth', '1', repoUrl, targetDir], { stdio: 'inherit' });
-    gitProcess.on('error', reject);
-    gitProcess.on('close', code => {
-      if (code === 0) resolve();
-      else reject(new Error(`git clone exited with code ${code}`));
-    });
+function githubRepositorySlug(repositoryUrl) {
+  const match = /^(?:https:\/\/github\.com\/|git@github\.com:)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(repositoryUrl);
+  if (!match) throw new Error('Core registry repository must be a GitHub repository');
+  return match[1];
+}
+
+function gitRepositoryUrls(repositoryUrl) {
+  const slug = githubRepositorySlug(repositoryUrl);
+  return [...new Set([repositoryUrl, `git@github.com:${slug}.git`])];
+}
+
+async function gitAvailable(run = execFileCommand) {
+  try {
+    await run('git', ['--version']);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+async function checkoutCoreWithGit(descriptor, targetDir, run = execFileCommand) {
+  let lastError;
+  for (const repositoryUrl of gitRepositoryUrls(descriptor.github_repo_url)) {
+    await fs.rm(targetDir, { recursive: true, force: true });
+    await fs.mkdir(targetDir, { recursive: true });
+    try {
+      await run('git', ['init', '--quiet', targetDir]);
+      await run('git', ['-C', targetDir, 'remote', 'add', 'origin', repositoryUrl]);
+      await run('git', ['-C', targetDir, 'fetch', '--quiet', '--depth', '1', 'origin', descriptor.source_commit], {
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+      await run('git', ['-C', targetDir, 'checkout', '--quiet', '--detach', 'FETCH_HEAD']);
+      const { stdout } = await run('git', ['-C', targetDir, 'rev-parse', 'HEAD']);
+      const commit = stdout.trim();
+      if (commit !== descriptor.source_commit) throw new Error('Git checkout does not match the registered Core commit');
+      return commit;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error(`Git could not download the registered Core repository: ${lastError?.stderr?.trim() || lastError?.message}`);
+}
+
+function safeArchivePath(entryName, rootName) {
+  if (!entryName || entryName.includes('\\') || entryName.includes('\0') || entryName.startsWith('/')) {
+    throw new Error('Core ZIP contains an unsafe path');
+  }
+  const parts = entryName.replace(/\/$/, '').split('/');
+  if (parts.some(part => !part || part === '.' || part === '..') || parts[0] !== rootName) {
+    throw new Error('Core ZIP contains an unsafe path');
+  }
+  return parts.slice(1).join('/');
+}
+
+async function extractCoreZip(archiveBytes, targetDir) {
+  const archive = new AdmZip(archiveBytes);
+  const entries = archive.getEntries();
+  if (entries.length === 0 || entries.length > 25_000) throw new Error('Core ZIP has an invalid file count');
+  const firstParts = entries.map(entry => entry.entryName.replace(/\/$/, '').split('/')[0]).filter(Boolean);
+  const rootName = firstParts[0];
+  if (!rootName || firstParts.some(name => name !== rootName)) throw new Error('Core ZIP must contain one root directory');
+
+  const seen = new Set();
+  let extractedBytes = 0;
+  await fs.mkdir(targetDir, { recursive: true });
+  for (const entry of entries) {
+    const relativePath = safeArchivePath(entry.entryName, rootName);
+    if (!relativePath) continue;
+    const key = relativePath.toLowerCase();
+    if (seen.has(key)) throw new Error(`Core ZIP contains a duplicate path: ${relativePath}`);
+    seen.add(key);
+
+    const mode = (entry.header.attr >>> 16) & 0xffff;
+    if ((mode & 0o170000) === 0o120000) throw new Error(`Core ZIP contains a symbolic link: ${relativePath}`);
+    const destination = path.resolve(targetDir, relativePath);
+    if (destination !== targetDir && !destination.startsWith(`${targetDir}${path.sep}`)) throw new Error('Core ZIP path escapes its target');
+    if (entry.isDirectory) {
+      await fs.mkdir(destination, { recursive: true });
+      continue;
+    }
+
+    const bytes = entry.getData();
+    extractedBytes += bytes.length;
+    if (extractedBytes > 512 * 1024 * 1024) throw new Error('Core ZIP expands beyond the supported size');
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.writeFile(destination, bytes, { mode: mode & 0o111 ? 0o755 : 0o644 });
+  }
+}
+
+async function downloadCoreZip(descriptor, targetDir, options = {}) {
+  const archiveBytes = await readLocation(descriptor.download_url, {
+    fetch: options.fetch,
+    maxBytes: 256 * 1024 * 1024,
+    timeout: 60_000,
   });
+  const checksum = crypto.createHash('sha256').update(archiveBytes).digest('hex');
+  if (checksum !== descriptor.archive_checksum.value) throw new Error('Core ZIP checksum does not match the registry');
+  await extractCoreZip(archiveBytes, targetDir);
+  return descriptor.source_commit;
+}
+
+async function acquireCore(descriptor, targetDir, options = {}) {
+  if (await (options.gitAvailable ?? gitAvailable)(options.run)) {
+    return checkoutCoreWithGit(descriptor, targetDir, options.run);
+  }
+  return downloadCoreZip(descriptor, targetDir, options);
 }
 
 async function rollbackInitialise(targetDir, previousDir, installedNames, movedPrevious, targetExisted) {
@@ -150,22 +286,26 @@ async function initialise(target = '.', options = {}) {
   const resolvedTargetDir = useCurrentDir ? cwd : path.resolve(cwd, target);
   let transactionRoot = null;
   let retainTransaction = false;
+  let coreInstalled = false;
 
   try {
+    printInitialiseBanner();
     assertSafeTargetDirectory(resolvedTargetDir, cwd);
-    printGitHubDevelopmentWarning();
 
     const targetExisted = await pathExists(resolvedTargetDir);
     const targetEntries = targetExisted ? await fs.readdir(resolvedTargetDir, { withFileTypes: true }) : [];
-    const hasGitDir = targetEntries.some(entry => entry.name === '.git');
     const hasContentToReplace = targetEntries.some(entry => entry.name !== '.git');
 
-    if (useCurrentDir || hasGitDir || hasContentToReplace) {
-      await promptYesOnly(
-        '\x1b[41m\x1b[97mWARNING:\x1b[0m\x1b[33m Existing contents except .git will be replaced only after Core has downloaded and prepared successfully. Type Y to confirm: \x1b[0m',
-      );
+    if (hasContentToReplace) {
+      await confirmReplacement(resolvedTargetDir);
     }
 
+    const copy = require('../messages/en.json').InitialiseCli;
+    printInitialiseStep(1, copy.StepRegistry);
+    const descriptor = await loadCoreDescriptor(options.registry, { fetch: options.fetch });
+    const repository = githubRepositorySlug(descriptor.github_repo_url);
+
+    printInitialiseStep(2, copy.StepWorkspace);
     const parentDir = path.dirname(resolvedTargetDir);
     await fs.mkdir(parentDir, { recursive: true });
     transactionRoot = await fs.mkdtemp(path.join(parentDir, `.${path.basename(resolvedTargetDir)}.supacharger-init-`));
@@ -173,29 +313,44 @@ async function initialise(target = '.', options = {}) {
     const previousDir = path.join(transactionRoot, 'previous');
     await fs.mkdir(previousDir);
 
-    console.log(`\x1b[34mPreparing Core outside the target directory: ${preparedDir}\x1b[0m`);
-    await gitClone(CORE_SSH_URL, preparedDir);
-    const { stdout: commitHash } = await execCommand('git rev-parse HEAD', { cwd: preparedDir });
+    printInitialiseStep(3, copy.StepDownload.replace('{version}', descriptor.version));
+    const commitHash = await acquireCore(descriptor, preparedDir, options);
+
+    printInitialiseStep(4, copy.StepPrepare);
     await prepareStarter(preparedDir);
     await removeGitDir(preparedDir);
-    await writeCoreLock(preparedDir, commitHash.trim());
 
-    console.log(`\x1b[34mInstalling prepared Core into: ${resolvedTargetDir}\x1b[0m`);
+    printInitialiseStep(5, copy.StepLock.replace('{version}', descriptor.version));
+    await writeCoreLock(preparedDir, repository, commitHash, descriptor.version);
+
+    printInitialiseStep(6, copy.StepInstall.replace('{path}', resolvedTargetDir));
     try {
       await installPreparedStarter(preparedDir, resolvedTargetDir, previousDir, targetExisted);
+      coreInstalled = true;
     } catch (error) {
       retainTransaction = Boolean(error.recoveryDirectory);
       throw error;
     }
 
+    printInitialiseStep(7, copy.StepCleanup);
     await fs.rm(transactionRoot, { recursive: true, force: true });
     transactionRoot = null;
 
-    if (!options.skipSkills && process.stdin.isTTY && process.stdout.isTTY) {
+    if (process.stdin.isTTY && process.stdout.isTTY) {
+      await configureEnvironment(resolvedTargetDir);
+      if (!options.skipSkills) {
+        try {
+          await require('./skills/installer.cjs').runSkills([], { root: resolvedTargetDir, throwOnCancel: true });
+        } catch (error) {
+          if (isPromptCancellation(error)) throw error;
+          console.warn(require('./skills/installer.cjs').message('OptionalFailed', { reason: error.message }));
+        }
+      }
       try {
-        await require('./skills/installer.cjs').runSkills([], { root: resolvedTargetDir });
+        await selectAvailableExtensions({ root: resolvedTargetDir, registry: options.registry });
       } catch (error) {
-        console.warn(require('./skills/installer.cjs').message('OptionalFailed', { reason: error.message }));
+        if (isPromptCancellation(error)) throw error;
+        console.warn(copyInitialiseExtensionFailure(error.message));
       }
     }
 
@@ -204,9 +359,14 @@ async function initialise(target = '.', options = {}) {
     if (transactionRoot && !retainTransaction) {
       await fs.rm(transactionRoot, { recursive: true, force: true }).catch(() => {});
     }
-    if (error.message === 'Cancelled by user') {
-      console.log('\x1b[34mOperation cancelled by user.\x1b[0m');
-      process.exit(0);
+    if (error?.code === 'USER_CANCELLED' || isPromptCancellation(error)) {
+      const cancellationCopy = require('../messages/en.json').InitialiseCli;
+      const message = coreInstalled
+        ? cancellationCopy.CancelledAfterInstall.replace('{path}', resolvedTargetDir)
+        : cancellationCopy.CancelledBeforeInstall;
+      console.log(`\n\x1b[34m${message}\x1b[0m`);
+      process.exitCode = error?.code === 'USER_CANCELLED' ? 0 : 130;
+      return;
     }
     console.error('Error during initialise:', error);
     process.exit(1);
@@ -215,8 +375,22 @@ async function initialise(target = '.', options = {}) {
 
 module.exports = initialise;
 module.exports.testHelpers = {
+  acquireCore,
   assertSafeTargetDirectory,
+  checkoutCoreWithGit,
+  confirmReplacement,
+  downloadCoreZip,
+  extractCoreZip,
+  gitAvailable,
+  githubRepositorySlug,
   installPreparedStarter,
+  isPromptCancellation,
   isCurrentDirTarget,
+  printInitialiseBanner,
+  printInitialiseStep,
   rollbackInitialise,
 };
+
+function copyInitialiseExtensionFailure(reason) {
+  return require('../messages/en.json').ExtensionsCli.InitialiseFailed.replace('{reason}', reason);
+}

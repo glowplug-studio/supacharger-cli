@@ -5,7 +5,6 @@ const readline = require('readline');
 const os = require('os');
 const { isDeepStrictEqual } = require('node:util');
 
-const { printGitHubDevelopmentWarning } = require('./common/github-development-warning');
 
 const { cleanScripts, isTestScript } = require('./common/test-distribution');
 const cleanupMessages = require('../messages/en.json').ApplicationCleanup;
@@ -425,7 +424,6 @@ async function migrateLocalTotpConfig(rootDir, options = {}) {
 
 async function migrateImageFunctionConfig(rootDir, options = {}) {
   const configPath = path.join(rootDir, 'supabase', 'config.toml');
-  const requiredAsset = './functions/process-image-upload/magick.wasm';
   let source;
   try {
     source = await fs.readFile(configPath, 'utf8');
@@ -434,34 +432,58 @@ async function migrateImageFunctionConfig(rootDir, options = {}) {
     throw error;
   }
 
-  const bounds = tomlSectionBounds(source, 'functions.process-image-upload');
-  const section = bounds ? source.slice(bounds.start, bounds.end) : '';
+  // Follow the requested Core revision, including when upgrading a legacy consumer.
+  const targetConfig = options.sourceRoot
+    ? await fs.readFile(path.join(options.sourceRoot, 'supabase', 'config.toml'), 'utf8')
+    : source;
+  const functionName = ['process_image_upload', 'process-image-upload-v2', 'process-image-upload']
+    .find((name) => tomlSectionBounds(targetConfig, `functions.${name}`));
+  if (!functionName) return [];
+  const requiredAsset = `./functions/${functionName}/magick.wasm`;
+  if (options.sourceRoot) {
+    // Managed assets have already moved into the consumer during a real update.
+    await fs.access(path.join(options.plan ? options.sourceRoot : rootDir, 'supabase', requiredAsset));
+  }
+  const setting = `functions.${functionName}.static_files`;
+  const retiredSections = functionName === 'process_image_upload'
+    ? ['process-image-upload-v2', 'process-image-upload'].filter((name) => tomlSectionBounds(source, `functions.${name}`))
+    : [];
+  let configSource = source;
+  for (const name of retiredSections) {
+    const retired = tomlSectionBounds(configSource, `functions.${name}`);
+    configSource = `${configSource.slice(0, retired.start)}${configSource.slice(retired.end)}`;
+  }
+  const bounds = tomlSectionBounds(configSource, `functions.${functionName}`);
+  const section = bounds ? configSource.slice(bounds.start, bounds.end) : '';
   const staticFiles = /^static_files\s*=\s*\[([^\]]*)\]\s*$/m.exec(section);
-  if (section.includes(`"${requiredAsset}"`)) return [];
-  if (options.plan === true) return ['functions.process-image-upload.static_files'];
+  const hasAsset = section.includes(`"${requiredAsset}"`);
+  const changes = [...retiredSections.map((name) => `functions.${name} (remove)`), ...(!hasAsset ? [setting] : [])];
+  if (changes.length === 0 || options.plan === true) return changes;
 
   if (options.backup !== false) {
     await backupConflicts(rootDir, rootDir, ['supabase/config.toml']);
   }
 
   let migrated;
-  if (!bounds) {
-    migrated = `${source.replace(/\s*$/, '')}\n\n[functions.process-image-upload]\nverify_jwt = true\nstatic_files = ["${requiredAsset}"]\n`;
+  if (hasAsset) {
+    migrated = configSource;
+  } else if (!bounds) {
+    migrated = `${configSource.replace(/\s*$/, '')}\n\n[functions.${functionName}]\nverify_jwt = true\nstatic_files = ["${requiredAsset}"]\n`;
   } else if (staticFiles) {
     const values = staticFiles[1].trim();
     const replacement = `static_files = [${values}${values ? ', ' : ''}"${requiredAsset}"]`;
     const migratedSection = section.replace(staticFiles[0], replacement);
-    migrated = `${source.slice(0, bounds.start)}${migratedSection}${source.slice(bounds.end)}`;
+    migrated = `${configSource.slice(0, bounds.start)}${migratedSection}${configSource.slice(bounds.end)}`;
   } else {
     const migratedSection = `${section.replace(/\s*$/, '')}\nstatic_files = ["${requiredAsset}"]\n`;
-    migrated = `${source.slice(0, bounds.start)}${migratedSection}${source.slice(bounds.end)}`;
+    migrated = `${configSource.slice(0, bounds.start)}${migratedSection}${configSource.slice(bounds.end)}`;
   }
 
   await fs.writeFile(configPath, migrated, 'utf8');
   if (!options.quiet) {
-    console.log('\x1b[34mBundled the ImageMagick WASM asset for process-image-upload.\x1b[0m');
+    console.log(`\x1b[34mBundled the ImageMagick WASM asset for ${functionName}.\x1b[0m`);
   }
-  return ['functions.process-image-upload.static_files'];
+  return changes;
 }
 
 async function migrateProfileMediaFunctionConfig(rootDir, options = {}) {
@@ -1668,6 +1690,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     legacyMfaConfigMigration,
     localTotpConfigMigration,
     imageFunctionConfigMigration,
+    profileMediaFunctionConfigMigration,
     rootDocumentConfigMigration,
     sessionTransferConfigMigration,
     signUpTermsConfigMigration,
@@ -1684,7 +1707,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     migrateLegacyAuthSessionConfig(rootDir, { plan: true }),
     migrateLegacyMfaConfig(rootDir, { plan: true }),
     migrateLocalTotpConfig(rootDir, { plan: true }),
-    migrateImageFunctionConfig(rootDir, { plan: true }),
+    migrateImageFunctionConfig(rootDir, { plan: true, sourceRoot: latestDir }),
     migrateProfileMediaFunctionConfig(rootDir, { plan: true }),
     migrateRootDocumentConfig(rootDir, { plan: true }),
     migrateSessionTransferConfig(rootDir, { plan: true }),
@@ -1721,6 +1744,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     legacyMfaConfigMigration,
     localTotpConfigMigration,
     imageFunctionConfigMigration,
+    profileMediaFunctionConfigMigration,
     manualMergeChanges: await changedManualMergePaths(baselineDir, latestDir, latestManifest),
     newManagedPathCollisions,
     ownershipTransitionChanges: await changedOwnershipTransitionPathsFromContents(
@@ -1780,6 +1804,8 @@ async function printPlan(rootDir, installState, options = {}) {
     plan.localTotpConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}=true`));
     console.log(`Image function bundle changes: ${plan.imageFunctionConfigMigration.length}`);
     plan.imageFunctionConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}`));
+    console.log(`Profile media function changes: ${plan.profileMediaFunctionConfigMigration.length}`);
+    plan.profileMediaFunctionConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}=false`));
     console.log(`Canonical English message additions: ${plan.englishCatalogueAdditions.length}`);
     plan.englishCatalogueAdditions.forEach((key) => console.log(`  MESSAGE ${key}`));
   } finally {
@@ -1802,7 +1828,6 @@ async function coreupdate(options = {}) {
       process.exit(1);
     }
 
-    if (!options.source) printGitHubDevelopmentWarning();
 
     if (options.plan === true) {
       await printPlan(cwd, installState, options);
@@ -1929,7 +1954,7 @@ Enter Y to continue: \u001b[0m`;
       await migrateLegacyAuthSessionConfig(cwd);
       await migrateLegacyMfaConfig(cwd);
       await migrateLocalTotpConfig(cwd);
-      await migrateImageFunctionConfig(cwd);
+      await migrateImageFunctionConfig(cwd, { sourceRoot: updateDir });
       await migrateProfileMediaFunctionConfig(cwd);
       await migrateAuthProviderConfig(cwd);
       await migrateRootDocumentConfig(cwd);
@@ -2043,7 +2068,7 @@ Enter Y to continue: \u001b[0m`;
     await migrateLegacyAuthSessionConfig(cwd);
     await migrateLegacyMfaConfig(cwd);
     await migrateLocalTotpConfig(cwd);
-    await migrateImageFunctionConfig(cwd);
+    await migrateImageFunctionConfig(cwd, { sourceRoot: updateDir });
     await migrateProfileMediaFunctionConfig(cwd);
     await migrateAuthProviderConfig(cwd);
     await migrateRootDocumentConfig(cwd);

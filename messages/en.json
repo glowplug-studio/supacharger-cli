@@ -1,7 +1,4 @@
 {
-  "GitHubCli": {
-    "DevelopmentWarning": "WARNING: This GitHub operation is for demonstration only while the repositories are under development."
-  },
   "CoreDevelopmentCli": {
     "CommandDescription": "Manage optional private instructions for contributing to Supacharger Core",
     "InstallDescription": "Install or initialise the Core contributor Git submodule",
@@ -69,18 +66,73 @@
   "ApplicationCleanup": {
     "RemovedTestScript": "  REMOVE TEST SCRIPT {name}"
   },
+  "InitialiseCli": {
+    "ReplacementWarning": "WARNING",
+    "ReplacementIntroduction": "This folder already contains files.",
+    "ReplacementTarget": "Continuing will replace everything inside: {path}",
+    "ReplacementDetail": "The .git folder will be kept. Every other file and folder will be removed only after the new Supacharger Core has downloaded successfully.",
+    "ReplacementQuestion": "Continue? Enter Y to replace the contents, or n to cancel:",
+    "ReplacementInvalid": "Please enter Y to continue or n to cancel.",
+    "StepRegistry": "Reading the Supacharger release registry...",
+    "StepWorkspace": "Creating a temporary installation workspace...",
+    "StepDownload": "Downloading and verifying Supacharger Core {version}...",
+    "StepPrepare": "Preparing the application files...",
+    "StepLock": "Recording Supacharger Core {version} installation metadata...",
+    "StepInstall": "Installing Supacharger Core in {path}...",
+    "StepCleanup": "Removing temporary installation files...",
+    "CancelledBeforeInstall": "Exiting.",
+    "CancelledAfterInstall": "Setup cancelled. Supacharger Core remains installed at {path}; environment, skills or extension setup may be incomplete."
+  },
+  "EnvironmentSetupCli": {
+    "NamespaceHeading": "Project namespace",
+    "NamespacePrompt": "Namespace generated Supabase resources? Enter 1–20 lowercase letters, digits or underscores, starting with a letter; press Enter for none",
+    "NamespaceInvalid": "Use 1–20 lowercase letters, digits or underscores, starting with a letter, or leave it empty.",
+    "NamespaceConfigMissing": "PROJECT_NAMESPACE was not found in the installed configuration: {path}",
+    "NamespaceSet": "Supabase resources will use the {namespace} namespace.",
+    "NamespaceSkipped": "No Supabase resource namespace selected.",
+    "SupabaseHeading": "Supabase setup",
+    "SupabaseConfirm": "Do you want to set up Supabase?",
+    "SupabaseUrl": "Project URL — Supabase Settings > API (for example https://project.supabase.co)",
+    "SupabasePublishableKey": "Publishable key — safe for browser use; Supabase Settings > API",
+    "SupabaseServiceRoleKey": "Service-role key — server-only privileged key; never expose it in the browser",
+    "StripeHeading": "Stripe setup",
+    "StripeConfirm": "Do you want to set up Stripe?",
+    "StripeSecretKey": "Secret key — Stripe test API key beginning sk_test_",
+    "StripeWebhookSecret": "Webhook signing secret — Stripe Workbench value beginning whsec_",
+    "StripeGeneratedSecrets": "Generated separate event-processor and reconciliation secrets.",
+    "ApplicationHeading": "Application environment",
+    "SiteUrl": "Site URL — browser origin used for local redirects and links",
+    "GoogleAnalyticsId": "Google Analytics ID — optional GA4 measurement ID, or leave blank",
+    "ImageSigningSecret": "Generated the shared image-upload signing secret.",
+    "Existing": "Kept existing environment file: {path}",
+    "MissingExample": "Cannot create .env.local because the installed Core example is missing: {path}",
+    "Created": "Created environment file: {path}"
+  },
+  "VersionCli": {
+    "Description": "Show the installed Supacharger Core version from this directory or its parents",
+    "NotFound": "No Supacharger Core installation was found in this directory or its parents.",
+    "UnsafeLock": "Core lock must be a regular file and not a symbolic link: {path}",
+    "InvalidLock": "Core lock is invalid: {path}"
+  },
   "ExtensionsCli": {
-    "Description": "Install and inspect reviewed local extension bundles",
+    "Description": "List, install and inspect registered extension bundles",
+    "Available": "List extensions available in the Supacharger registry",
+    "Installed": "installed",
+    "InstallQuestion": "Would you like to install one of these extensions? N or enter a number to install: ",
+    "InvalidSelection": "Enter N or one of the listed extension numbers.",
+    "AlreadyInstalled": "{name} is already installed.",
+    "NotPublished": "{name} is registered but does not have a published install release yet.",
+    "SourceRequired": "{name} is published. Install it with: supacharger extension install {name} --source <directory>",
+    "InitialisePrompt": "Select extensions to install later (Space selects; Enter confirms; empty skips)",
+    "InitialiseDeferred": "Extension selection preview complete. No extensions were downloaded or installed.",
+    "InitialiseFailed": "Optional extension selection was not completed: {reason}. Retry with supacharger extension available.",
     "Install": "Copy a reviewed local bundle into its declared project destinations",
     "Source": "Local extension repository or extracted bundle directory",
     "Root": "Target Supacharger application directory",
     "Plan": "Validate and show file writes without changing the project",
-    "Doctor": "Verify installed extension files; configuration and deployment are not checked",
+    "Doctor": "Compare installed extension files with the supplied update directory",
     "Update": "Compare original and incoming local releases, then update unchanged installed files",
-    "BaselineSource": "Local source directory for the original installed release",
-    "Registry": "Local registry JSON snapshot for incoming release verification",
-    "BaselineRegistry": "Optional original-release registry snapshot",
-    "ReviewQuestion": "This extension has local changes and cannot be updated automatically. Prepare source copies and an AI comparison prompt? [y/N] ",
-    "Downloads": "Versioned ZIP downloads are coming soon; use local source directories."
+    "Registry": "Registry manifest URL or local manifest path",
+    "Downloads": "The registry supplies Core and extension source metadata."
   }
 }

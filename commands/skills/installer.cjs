@@ -224,7 +224,11 @@ async function runSkills(ids = [], options = {}) {
     console.log(installed.length ? message(options.update ? 'UpdatedResult' : 'InstalledResult', { ids: installed.join(', '), commit: source.commit }) : message('NoChanges'));
     return installed;
   } catch (error) {
-    if (error.name === 'ExitPromptError') { console.log(message('Cancelled')); return []; }
+    if (error.name === 'ExitPromptError') {
+      if (options.throwOnCancel) throw error;
+      console.log(message('Cancelled'));
+      return [];
+    }
     throw error;
   } finally { await source.close(); }
 }

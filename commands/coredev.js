@@ -3,7 +3,6 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 
-const { printGitHubDevelopmentWarning } = require('./common/github-development-warning');
 
 const english = require('../messages/en.json').CoreDevelopmentCli;
 const exec = promisify(execFile);
@@ -71,13 +70,11 @@ async function installCoreDevelopment({ cwd = process.cwd(), repository = SUBMOD
   const entry = await registration(root, environment);
   if (entry) {
     assertExpectedRegistration(entry, repository);
-    if (repository.includes('github.com')) printGitHubDevelopmentWarning();
     await git(root, ['submodule', 'update', '--init', '--recursive', '--', SUBMODULE_PATH], { environment });
     const commit = await git(root, ['-C', SUBMODULE_PATH, 'rev-parse', 'HEAD'], { environment });
     return { action: 'initialised', root, commit };
   }
   if (await stat(path.join(root, SUBMODULE_PATH))) throw new Error(message('DestinationExists'));
-  if (repository.includes('github.com')) printGitHubDevelopmentWarning();
   await git(root, ['submodule', 'add', '--branch', branch, '--', repository, SUBMODULE_PATH], { environment });
   const commit = await git(root, ['-C', SUBMODULE_PATH, 'rev-parse', 'HEAD'], { environment });
   return { action: 'installed', root, commit };
@@ -88,7 +85,6 @@ async function updateCoreDevelopment({ cwd = process.cwd(), repository = SUBMODU
   const entry = await registration(root, environment);
   if (!entry) throw new Error(message('NotInstalled'));
   assertExpectedRegistration(entry, repository);
-  if (repository.includes('github.com')) printGitHubDevelopmentWarning();
   await git(root, ['submodule', 'update', '--init', '--recursive', '--', SUBMODULE_PATH], { environment });
   const changes = await git(root, ['-C', SUBMODULE_PATH, 'status', '--porcelain'], { environment });
   if (changes) throw new Error(message('LocalChanges'));

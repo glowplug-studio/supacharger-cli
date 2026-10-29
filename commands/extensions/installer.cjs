@@ -1,9 +1,8 @@
 // Canonical installer, shipped byte-identically in the Supacharger CLI.
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { createHash, randomUUID } = require('node:crypto');
+const { randomUUID } = require('node:crypto');
 
-const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const validId = value => typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value);
 const inside = (file, parent) => file === parent || file.startsWith(`${parent}/`);
 function relative(value) {
@@ -83,7 +82,7 @@ function validateManifest(manifest, id) {
     if (config !== (file.kind === 'config')) throw new Error('Extension config must be marked developer-owned with kind config');
     if ((!migration && !allowed.some(prefix => file.target.startsWith(`${prefix}/`))) ||
         (file.kind !== undefined && !migration && !config) ||
-        !/^[a-f0-9]{64}$/.test(file.sha256) || destinations.has(file.target.toLowerCase())) throw new Error('Invalid extension destination or digest');
+        destinations.has(file.target.toLowerCase())) throw new Error('Invalid extension destination');
     destinations.add(file.target.toLowerCase());
   }
   const guides = manifest.files.filter(file => file.source.startsWith('payload/agents/'));
@@ -101,99 +100,66 @@ async function ownership(root, files) {
     }
   }
 }
-async function install(id, options = {}) {
-  if (!options.source) throw new Error('Use --source with a reviewed local bundle. Specdrive token downloads are not implemented.');
+async function compare(id, options = {}) {
+  if (!options.source) throw new Error('Supply --source with the downloaded extension directory');
   const root = await fs.realpath(options.root ?? process.cwd());
   const source = await fs.realpath(options.source);
-  const manifestBytes = await fs.readFile(await safePath(source, 'extension.json'));
-  const manifest = JSON.parse(manifestBytes);
+  const manifest = JSON.parse(await fs.readFile(await safePath(source, 'extension.json'), 'utf8'));
   validateManifest(manifest, id);
   await ownership(root, manifest.files);
-  const lockPath = await safePath(root, `.supacharger/extensions/${id}.json`);
-  const oldBytes = await readOptional(lockPath);
-  const old = oldBytes ? JSON.parse(oldBytes) : null;
-  if (old) validateManifest(old.manifest, id);
-  if (old && old.manifest.version === manifest.version && old.manifestSha256 !== digest(manifestBytes)) throw new Error('Published extension versions are immutable; increment the version');
-  if (old && old.manifest.version.split('.').map(Number).some((v, i, a) => a.slice(0, i).every((n, j) => n === Number(manifest.version.split('.')[j])) && v > Number(manifest.version.split('.')[i]))) throw new Error('Extension downgrades require manual review');
-  const prior = new Map((old?.manifest.files ?? []).map(file => [file.target, file.sha256]));
-  const priorKinds = new Map((old?.manifest.files ?? []).map(file => [file.target, file.kind]));
-  if ([...prior.keys()].some(target => !manifest.files.some(file => file.target === target))) throw new Error('Removed destinations require manual migration; nothing changed');
   const changes = [];
   for (const file of manifest.files) {
     const bytes = await fs.readFile(await safePath(source, file.source));
-    if (digest(bytes) !== file.sha256) throw new Error(`Bundle checksum mismatch: ${file.source}`);
-    const target = await safePath(root, file.target);
-    const existing = await readOptional(target);
+    const targetPath = await safePath(root, file.target);
+    const existing = await readOptional(targetPath);
     if (file.kind === 'migration') {
-      if (prior.has(file.target) && prior.get(file.target) !== file.sha256) throw new Error(`Migration history is immutable: ${file.target}`);
+      if (existing && !existing.equals(bytes)) throw new Error(`Migration history is immutable: ${file.target}`);
       const version = path.basename(file.target).slice(0, 14);
       const siblings = await fs.readdir(path.join(root, 'supabase/migrations')).catch(error => { if (error.code !== 'ENOENT') throw error; return []; });
       if (siblings.some(name => name.startsWith(`${version}_`) && name !== path.basename(file.target))) throw new Error(`Migration version collision: ${version}`);
     }
-    if (prior.has(file.target) && priorKinds.get(file.target) !== file.kind) throw new Error('Changing file ownership requires manual review');
-    if (file.kind === 'config') {
-      changes.push({ ...file, targetPath: target, bytes, existing, write: !existing });
-      continue;
-    }
-    if (prior.has(file.target) && (!existing || digest(existing) !== prior.get(file.target))) throw new Error(`Locally modified or missing extension file: ${file.target}`);
-    if (!prior.has(file.target) && existing && digest(existing) !== file.sha256) throw new Error(`Existing project file: ${file.target}`);
-    changes.push({ ...file, targetPath: target, bytes, existing, write: !existing || digest(existing) !== file.sha256 });
+    changes.push({ target: file.target, kind: file.kind, targetPath, bytes, existing,
+      write: file.kind === 'config' ? !existing : !existing || !existing.equals(bytes) });
   }
+  return { root, manifest, changes };
+}
+async function install(id, options = {}) {
+  const { root, manifest, changes } = await compare(id, options);
   const result = { id, version: manifest.version, writes: changes.filter(c => c.write).map(c => c.target), guide: `docs/extensions/${id}/INSTALL.md` };
   if (options.plan) return { ...result, plan: true };
-  // Stage and back up outside compilable source. An OS interruption leaves recovery material.
-  const transaction = `.supacharger/extension-transactions/${id}-${randomUUID()}`;
-  const stagePath = await safePath(root, `${transaction}/plan.json`);
-  await fs.mkdir(path.dirname(stagePath), { recursive: true });
-  await fs.writeFile(stagePath, JSON.stringify(result, null, 2), { flag: 'wx' });
   const completed = [];
   try {
-    for (const [index, change] of changes.filter(c => c.write).entries()) {
-      if (change.existing) await fs.writeFile(path.join(path.dirname(stagePath), `${index}.before`), change.existing, { flag: 'wx' });
+    for (const change of changes.filter(c => c.write)) {
       await safePath(root, change.target);
       const current = await readOptional(change.targetPath);
-      if ((current && digest(current)) !== (change.existing && digest(change.existing))) throw new Error('Destination changed during installation');
+      if (current === null ? change.existing !== null : !change.existing || !current.equals(change.existing)) throw new Error('Destination changed during installation');
       await fs.mkdir(path.dirname(change.targetPath), { recursive: true });
-      const staged = path.join(path.dirname(stagePath), `${index}.next`);
-      await fs.writeFile(staged, change.bytes, { flag: 'wx' });
-      await fs.rename(staged, change.targetPath);
+      const staged = `${change.targetPath}.${randomUUID()}.tmp`;
+      try {
+        await fs.writeFile(staged, change.bytes, { flag: 'wx' });
+        await fs.rename(staged, change.targetPath);
+      } finally { await fs.rm(staged, { force: true }); }
       completed.push(change);
     }
     for (const change of changes) {
       if (change.kind === 'config') continue;
-      const installed = await readOptional(change.targetPath);
-      if (!installed || digest(installed) !== change.sha256) throw new Error(`Installed checksum mismatch: ${change.target}`);
+      const installed = await readOptional(await safePath(root, change.target));
+      if (!installed || !installed.equals(change.bytes)) throw new Error(`Installed file mismatch: ${change.target}`);
     }
-    await safePath(root, `.supacharger/extensions/${id}.json`);
-    if ((await readOptional(lockPath))?.toString() !== oldBytes?.toString()) throw new Error('Extension lock changed during installation');
-    await fs.mkdir(path.dirname(lockPath), { recursive: true });
-    if (oldBytes) await fs.writeFile(path.join(path.dirname(stagePath), 'lock.before'), oldBytes, { flag: 'wx' });
-    const stagedLock = path.join(path.dirname(stagePath), 'lock.next');
-    await fs.writeFile(stagedLock, JSON.stringify({ schemaVersion: 1, manifestSha256: digest(manifestBytes), manifest }, null, 2) + '\n', { flag: 'wx' });
-    await fs.rename(stagedLock, lockPath);
   } catch (error) {
     for (const change of completed.reverse()) {
-      await safePath(root, change.target);
-      const current = await readOptional(change.targetPath);
-      if (!current || digest(current) !== change.sha256) continue; // Preserve concurrent user edits.
+      const current = await readOptional(await safePath(root, change.target));
+      if (!current || !current.equals(change.bytes)) continue;
       if (change.existing) await fs.writeFile(change.targetPath, change.existing);
       else await fs.unlink(change.targetPath);
     }
     throw error;
   }
-  return { ...result, recovery: transaction };
+  return result;
 }
 async function doctor(id, options = {}) {
-  if (!validId(id)) throw new Error('Invalid extension ID');
-  const root = await fs.realpath(options.root ?? process.cwd());
-  const lock = JSON.parse(await fs.readFile(await safePath(root, `.supacharger/extensions/${id}.json`), 'utf8'));
-  validateManifest(lock.manifest, id);
-  await ownership(root, lock.manifest.files);
-  const conflicts = [];
-  for (const file of lock.manifest.files) {
-    const bytes = await readOptional(await safePath(root, file.target));
-    if (!bytes || (file.kind !== 'config' && digest(bytes) !== file.sha256)) conflicts.push(file.target);
-  }
-  return { id, version: lock.manifest.version, healthy: conflicts.length === 0, conflicts, configuration: 'not checked', deployment: 'not checked' };
+  const { manifest, changes } = await compare(id, options);
+  const differences = changes.filter(c => c.write).map(c => c.target);
+  return { id, version: manifest.version, matchesSource: differences.length === 0, differences, configuration: 'preserved', deployment: 'not checked' };
 }
-module.exports = { install, doctor, payloadTarget, validateManifest, safePath, readOptional, digest, ownership };
+module.exports = { install, doctor, compare, payloadTarget, validateManifest, safePath, readOptional, ownership };

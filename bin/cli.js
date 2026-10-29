@@ -7,6 +7,7 @@ const { runCoreDevelopment } = require('../commands/coredev');
 const initialiseCommand = require('../commands/initialise');
 const coreupdateCommand = require('../commands/coreupdate');
 const doctorCommand = require('../commands/doctor');
+const { printCoreVersion } = require('../commands/version');
 const { version } = require('../package.json');
 
 const program = new Command();
@@ -19,6 +20,11 @@ program
 
 registerSkills(program);
 registerExtensions(program);
+
+program
+  .command('version')
+  .description(require('../messages/en.json').VersionCli.Description)
+  .action(() => printCoreVersion());
 
 const coredev = program
   .command('coredev')
@@ -49,8 +55,9 @@ program
 
 program
   .command('init [target]')
-  .description('Clone the latest Supacharger starter into a target directory (use "." for current directory)')
+  .description('Install the registered Supacharger Core release into a target directory (use "." for current directory)')
   .option('--skip-skills', require('../messages/en.json').PublicSkillsCli.SkipDescription)
+  .option('--registry <location>', require('../messages/en.json').ExtensionsCli.Registry)
   .action((target, options) => initialiseCommand(target ?? '.', options));
 
 program.parseAsync(process.argv).catch(error => { console.error(error.message); process.exitCode = 1; });
