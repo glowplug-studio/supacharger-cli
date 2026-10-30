@@ -42,6 +42,7 @@ function payloadTarget(id, source) {
     if (!rest.includes('/')) throw new Error('Edge Function payload needs a file');
     return `supabase/functions/${rest}`;
   }
+  if (source.startsWith('payload/supabase/schemas/')) return `supabase/schemas/extensions/${id}/` + source.slice('payload/supabase/schemas/'.length);
   if (source.startsWith('payload/supabase/migrations/')) return 'supabase/migrations/' + source.slice('payload/supabase/migrations/'.length);
   if (source.startsWith('payload/agents/')) return `docs/agents/extensions/supacharger-ext-${id}/` + source.slice('payload/agents/'.length);
   if (source.startsWith('payload/docs/')) return `docs/extensions/${id}/` + source.slice('payload/docs/'.length);
@@ -75,6 +76,7 @@ function validateManifest(manifest, id) {
     ];
     const functionName = file.target.split('/')[2];
     if (file.target.startsWith('supabase/functions/') && extensionFunctionName(id, functionName)) allowed.push(`supabase/functions/${functionName}`);
+    const schema = file.kind === 'schema' && file.source.startsWith('payload/supabase/schemas/') && file.source.endsWith('.sql');
     const migration = file.kind === 'migration' &&
       new RegExp(`^supabase/migrations/[0-9]{14}_ext_${id.replaceAll('-', '_')}_[a-z0-9_]+\\.sql$`).test(file.target);
     if (migration) {
@@ -84,8 +86,8 @@ function validateManifest(manifest, id) {
     }
     const config = file.source === `payload/app/supacharger-ext-${id}.config.ts`;
     if (config !== (file.kind === 'config')) throw new Error('Extension config must be marked developer-owned with kind config');
-    if ((!migration && !allowed.some(prefix => file.target.startsWith(`${prefix}/`))) ||
-        (file.kind !== undefined && !migration && !config) ||
+    if ((!migration && !schema && !allowed.some(prefix => file.target.startsWith(`${prefix}/`))) ||
+        (file.kind !== undefined && !migration && !schema && !config) ||
         destinations.has(file.target.toLowerCase())) throw new Error('Invalid extension destination');
     destinations.add(file.target.toLowerCase());
   }
@@ -123,7 +125,12 @@ async function compare(id, options = {}) {
   await ownership(root, manifest.files);
   const changes = [];
   for (const file of manifest.files) {
-    const bytes = await fs.readFile(await safePath(source, file.source));
+    let bytes = await fs.readFile(await safePath(source, file.source));
+    if (file.kind === 'schema') {
+      const { namespace } = require(path.join(root, 'src/supacharger/extensions/services.cjs')).readServiceConfig(root);
+      const { renderDeclarativeSql } = require(path.join(root, 'src/supacharger/declarative-namespace.cjs'));
+      bytes = Buffer.from(renderDeclarativeSql(bytes.toString('utf8'), namespace));
+    }
     const targetPath = await safePath(root, file.target);
     const existing = await readOptional(targetPath);
     if (file.kind === 'migration') {

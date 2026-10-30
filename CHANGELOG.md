@@ -4,6 +4,8 @@
 
 ### Added
 
+- Declarative extension SQL payloads render the application namespace during installation; first setup renders Core starter definitions from the same configuration.
+
 - Initial installation resolves the exact Core repository and commit through the schema-2 registry, using Git when available or a checksum-verified ZIP otherwise.
 - Initial installation displays a Supacharger terminal banner and follows skill selection with a registry-backed extension checkbox preview that performs no download or installation.
 - Interactive initialisation creates `.env.local` from Core's example, groups Supabase and Stripe credential prompts, and generates independent application signing secrets.

@@ -145,6 +145,10 @@ async function configureEnvironment(root, options = {}) {
   const { resourceName } = require(path.join(root, 'src/supacharger/namespace.cjs'));
   const prompts = options.prompts ?? await loadPrompts();
   const namespace = await configureProjectNamespace(root, prompts);
+  const declarativeHelper = path.join(root, 'src/supacharger/declarative-namespace.cjs');
+  if (await fs.stat(declarativeHelper).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; })) {
+    require(declarativeHelper).prepareStarterSchemas(root);
+  }
   const imageSecretName = resourceName(namespace, 'image_upload_signing_secret', 'secret');
 
   let contents;
