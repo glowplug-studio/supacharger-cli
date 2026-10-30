@@ -5,6 +5,7 @@ const path = require('path');
 const readline = require('readline');
 const os = require('os');
 const { isDeepStrictEqual } = require('node:util');
+const ts = require('typescript');
 
 
 const { cleanScripts, isTestScript } = require('./common/test-distribution');
@@ -318,6 +319,80 @@ async function migrateAuthProviderConfig(rootDir, options = {}) {
     `\x1b[34mAdded disabled defaults for new OAuth providers in src/supacharger.config.ts: ${assessment.missingKeys.join(', ')}.\x1b[0m`
   );
   return assessment.missingKeys;
+}
+
+// Apply only to literal canonical settings: guessing through spreads, aliases or
+// legacy layouts could change a security policy or corrupt developer config.
+function signOutPolicyAssessment(source, { target = false } = {}) {
+  const file = ts.createSourceFile('supacharger.config.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  if (file.parseDiagnostics.length) throw new Error('Cannot parse application configuration; migrate sign-out policy manually.');
+  const bindings = file.statements.filter(ts.isVariableStatement).flatMap((s) => [...s.declarationList.declarations])
+    .filter((d) => ts.isIdentifier(d.name) && d.name.text === 'SC_CONFIG');
+  if (bindings.length !== 1) throw new Error('Cannot identify SC_CONFIG uniquely; migrate sign-out policy manually.');
+  let object = bindings[0].initializer;
+  while (object && (ts.isAsExpression(object) || ts.isSatisfiesExpression(object) || ts.isParenthesizedExpression(object))) object = object.expression;
+  const find = (node, name) => {
+    if (!node || !ts.isObjectLiteralExpression(node) || node.properties.some((p) => ts.isSpreadAssignment(p) || (p.name && ts.isComputedPropertyName(p.name)))) {
+      throw new Error(`Cannot safely inspect ${name}; migrate sign-out policy manually.`);
+    }
+    const props = node.properties.filter((p) => p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) && p.name.text === name);
+    if (props.length > 1 || (props.length && !ts.isPropertyAssignment(props[0]))) {
+      throw new Error(`Ambiguous ${name} configuration; migrate sign-out policy manually.`);
+    }
+    return props[0];
+  };
+  const auth = find(object, 'SUPABASE_AUTH');
+  if (!auth) {
+    if (target) return null;
+    throw new Error('Legacy or missing SUPABASE_AUTH: migrate the complete authentication contract before adding the sign-out policy.');
+  }
+  const session = find(auth.initializer, 'SESSION');
+  if (!session) {
+    if (target) return null;
+    throw new Error('Missing SUPABASE_AUTH.SESSION: migrate the complete authentication contract before adding the sign-out policy.');
+  }
+  const property = find(session.initializer, 'SIGN_OUT_ALL_DEVICES');
+  if (property) {
+    if (property.initializer.kind !== ts.SyntaxKind.TrueKeyword && property.initializer.kind !== ts.SyntaxKind.FalseKeyword) {
+      throw new Error('SIGN_OUT_ALL_DEVICES must be a literal boolean; migrate sign-out policy manually.');
+    }
+    return { present: true };
+  }
+  if (target) return null;
+  const sessionObject = session.initializer;
+  const close = sessionObject.getEnd() - 1;
+  const properties = sessionObject.properties;
+  const last = properties[properties.length - 1];
+  const comma = last && !properties.hasTrailingComma ? ',' : '';
+  return { present: false, close, comma };
+}
+
+async function migrateSignOutPolicyConfig(rootDir, options = {}) {
+  if (!options.sourceRoot) throw new Error('A target Core source is required for sign-out policy migration.');
+  const targetPath = path.join(options.sourceRoot, 'src', 'supacharger.config.ts');
+  const targetSource = await fs.readFile(targetPath, 'utf8');
+  if (!signOutPolicyAssessment(targetSource, { target: true })) return [];
+  const configPath = path.join(rootDir, 'src', 'supacharger.config.ts');
+  const source = await fs.readFile(configPath, 'utf8');
+  const assessment = signOutPolicyAssessment(source);
+  if (assessment.present) return [];
+  const changes = ['SUPABASE_AUTH.SESSION.SIGN_OUT_ALL_DEVICES'];
+  if (options.plan === true) return changes;
+  if (options.backup !== false) await backupConflicts(rootDir, rootDir, ['src/supacharger.config.ts']);
+  // The comma is inserted after the final property, not after a trailing comment.
+  const parsed = ts.createSourceFile('config.ts', source, ts.ScriptTarget.Latest, true);
+  const authDecl = parsed.statements.filter(ts.isVariableStatement).flatMap((s) => [...s.declarationList.declarations]).find((d) => ts.isIdentifier(d.name) && d.name.text === 'SC_CONFIG');
+  let root = authDecl.initializer;
+  while (ts.isAsExpression(root) || ts.isSatisfiesExpression(root) || ts.isParenthesizedExpression(root)) root = root.expression;
+  const auth = root.properties.find((p) => p.name?.text === 'SUPABASE_AUTH');
+  const session = auth.initializer.properties.find((p) => p.name?.text === 'SESSION').initializer;
+  const last = session.properties[session.properties.length - 1];
+  const insertCommaAt = last && !session.properties.hasTrailingComma ? last.getEnd() : -1;
+  let migrated = `${source.slice(0, assessment.close)}\n    SIGN_OUT_ALL_DEVICES: true,\n  ${source.slice(assessment.close)}`;
+  if (insertCommaAt >= 0) migrated = `${migrated.slice(0, insertCommaAt)},${migrated.slice(insertCommaAt)}`;
+  await fs.writeFile(configPath, migrated, 'utf8');
+  console.log('Added SUPABASE_AUTH.SESSION.SIGN_OUT_ALL_DEVICES=true to preserve existing global sign-out behaviour.');
+  return changes;
 }
 
 async function migrateLegacyAuthSessionConfig(rootDir, options = {}) {
@@ -1706,6 +1781,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     rootDocumentConfigMigration,
     sessionTransferConfigMigration,
     signUpTermsConfigMigration,
+    signOutPolicyConfigMigration,
   ] = await Promise.all([
     managedFiles(baselineDir, baselineManifest),
     managedFiles(latestDir, latestManifest),
@@ -1726,6 +1802,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     migrateRootDocumentConfig(rootDir, { plan: true }),
     migrateSessionTransferConfig(rootDir, { plan: true }),
     migrateSignUpTermsConfig(rootDir, { plan: true }),
+    migrateSignOutPolicyConfig(rootDir, { plan: true, sourceRoot: latestDir }),
   ]);
   const writes = [];
   for (const relPath of latestFiles) {
@@ -1771,6 +1848,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     rootDocumentConfigMigration,
     sessionTransferConfigMigration,
     signUpTermsConfigMigration,
+    signOutPolicyConfigMigration,
     writes,
   };
 }
@@ -1809,7 +1887,7 @@ async function printPlan(rootDir, installState, options = {}) {
     console.log(`Manual ownership migrations: ${plan.ownershipTransitionChanges.length}`);
     plan.ownershipTransitionChanges.forEach((file) => console.log(`  MOVE PROJECT CONFIG ${file}`));
     console.log(
-      `Developer config changes: ${plan.accountAlignmentConfigMigration.length + plan.authProviderConfigMigration.length + plan.legacyAuthSessionConfigMigration.length + plan.legacyMfaConfigMigration.length + plan.rootDocumentConfigMigration.length + plan.sessionTransferConfigMigration.length + plan.signUpTermsConfigMigration.length}`
+      `Developer config changes: ${plan.accountAlignmentConfigMigration.length + plan.authProviderConfigMigration.length + plan.legacyAuthSessionConfigMigration.length + plan.legacyMfaConfigMigration.length + plan.rootDocumentConfigMigration.length + plan.sessionTransferConfigMigration.length + plan.signUpTermsConfigMigration.length + plan.signOutPolicyConfigMigration.length}`
     );
     plan.accountAlignmentConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
     plan.authProviderConfigMigration.forEach((provider) => console.log(`  CONFIG AUTH_PROVDERS_ENABLED.${provider}=false`));
@@ -1818,6 +1896,7 @@ async function printPlan(rootDir, installState, options = {}) {
     plan.rootDocumentConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
     plan.signUpTermsConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
     plan.sessionTransferConfigMigration.forEach((key) => console.log(`  CONFIG ${key}`));
+    plan.signOutPolicyConfigMigration.forEach((key) => console.log(`  CONFIG ${key}=true`));
     console.log(`Local Supabase TOTP changes: ${plan.localTotpConfigMigration.length}`);
     plan.localTotpConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}=true`));
     console.log(`Image function bundle changes: ${plan.imageFunctionConfigMigration.length}`);
@@ -1971,6 +2050,7 @@ Enter Y to continue: \u001b[0m`;
       const latestManagedContents = await managedFileContents(updateDir, latestManagedFiles);
       const preservedPaths = latestManifest?.developerOwnedPaths ?? DEVELOPER_OWNED_PATHS;
       const targetsToBackup = [...latestManagedFiles, ...baselineManagedFiles.filter((file) => !latestManagedFiles.includes(file))];
+      await migrateSignOutPolicyConfig(cwd, { plan: true, sourceRoot: updateDir });
       await backupConflicts(cwd, cwd, targetsToBackup);
       await moveFiles(updateDir, cwd, preservedPaths, latestManifest?.managedPaths ?? null);
       await installMissingDeveloperStarters(updateDir, cwd);
@@ -1985,6 +2065,7 @@ Enter Y to continue: \u001b[0m`;
       await migrateAccountAlignmentConfig(cwd);
       await migrateSessionTransferConfig(cwd);
       await migrateSignUpTermsConfig(cwd);
+      await migrateSignOutPolicyConfig(cwd, { sourceRoot: updateDir });
       await mergeEnglishCatalogue(cwd, updateDir);
       await migrateLegacyPostcssConfig(cwd);
       await personaliseStarterProjectStyles(cwd);
@@ -2077,6 +2158,7 @@ Enter Y to continue: \u001b[0m`;
     });
     const latestManagedContents = await managedFileContents(updateDir, latestManagedFiles);
 
+    await migrateSignOutPolicyConfig(cwd, { plan: true, sourceRoot: updateDir });
     await backupConflicts(cwd, cwd, [
       ...latestManagedFiles,
       ...baselineManagedFiles.filter((file) => !latestManagedFiles.includes(file)),
@@ -2101,6 +2183,7 @@ Enter Y to continue: \u001b[0m`;
     await migrateAccountAlignmentConfig(cwd);
     await migrateSessionTransferConfig(cwd);
     await migrateSignUpTermsConfig(cwd);
+    await migrateSignOutPolicyConfig(cwd, { sourceRoot: updateDir });
     await mergeEnglishCatalogue(cwd, updateDir);
     await migrateLegacyPostcssConfig(cwd);
     await personaliseStarterProjectStyles(cwd);
@@ -2138,6 +2221,7 @@ coreupdate.testHelpers = {
   migrateAuthProviderConfig,
   migrateAccountAlignmentConfig,
   migrateSessionTransferConfig,
+  migrateSignOutPolicyConfig,
   migrateSignUpTermsConfig,
   migrateLegacyAuthSessionConfig,
   migrateLegacyMfaConfig,
