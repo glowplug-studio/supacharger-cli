@@ -58,6 +58,7 @@ program
 program
   .command('init [target]')
   .description('Install the registered Supacharger Core release into a target directory (use "." for current directory)')
+  .option('--namespace <code>', require('../messages/en.json').InitialiseCli.NamespaceOption)
   .option('--skip-skills', require('../messages/en.json').PublicSkillsCli.SkipDescription)
   .option('--registry <location>', require('../messages/en.json').ExtensionsCli.Registry)
   .action((target, options) => initialiseCommand(target ?? '.', options));

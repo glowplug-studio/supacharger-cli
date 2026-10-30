@@ -48,16 +48,36 @@ function namespaceReplacement(source, namespace, configPath) {
   return `${source.slice(0, initializer.getStart(sourceFile))}${value}${source.slice(initializer.end)}`;
 }
 
+async function readProjectNamespace(root) {
+  const configPath = path.join(root, 'src', 'supacharger.config.ts');
+  const source = await fs.readFile(configPath, 'utf8');
+  // Use the CLI's TypeScript dependency; a new application has no node_modules yet.
+  const file = ts.createSourceFile(configPath, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const declaration = file.statements.filter(ts.isVariableStatement)
+    .flatMap(statement => statement.declarationList.declarations)
+    .find(item => ts.isIdentifier(item.name) && item.name.text === 'SC_CONFIG');
+  if (!declaration?.initializer || !ts.isObjectLiteralExpression(declaration.initializer)) throw new Error(copy.NamespaceConfigMissing.replace('{path}', configPath));
+  const properties = declaration.initializer.properties.filter(property => ts.isPropertyAssignment(property) && property.name.getText(file).replace(/^['"]|['"]$/g, '') === 'PROJECT_NAMESPACE');
+  if (properties.length !== 1 || !ts.isStringLiteral(properties[0].initializer)) throw new Error(copy.NamespaceConfigMissing.replace('{path}', configPath));
+  const namespace = properties[0].initializer.text;
+  namespaceReplacement(source, namespace, configPath);
+  return namespace;
+}
+
+async function setProjectNamespace(root, namespace) {
+  const configPath = path.join(root, 'src', 'supacharger.config.ts');
+  const source = await fs.readFile(configPath, 'utf8');
+  await fs.writeFile(configPath, namespaceReplacement(source, namespace, configPath), 'utf8');
+  return namespace;
+}
+
 async function configureProjectNamespace(root, prompts) {
   console.log(`\n${colour(copy.NamespaceHeading, 'cyan')}`);
   const namespace = (await prompts.input({
-    message: copy.NamespacePrompt,
+    message: `${copy.NamespacePrompt}\n`,
     validate: answer => !answer.trim() || /^[a-z][a-z0-9_]{0,5}$/.test(answer.trim()) || copy.NamespaceInvalid,
   })).trim();
-  const configPath = path.join(root, 'src', 'supacharger.config.ts');
-  const source = await fs.readFile(configPath, 'utf8');
-  const updated = namespaceReplacement(source, namespace, configPath);
-  await fs.writeFile(configPath, updated, 'utf8');
+  await setProjectNamespace(root, namespace);
   console.log(namespace
     ? copy.NamespaceSet.replace('{namespace}', namespace)
     : copy.NamespaceSkipped);
@@ -129,26 +149,38 @@ async function loadPrompts() {
   return { confirm, input, password };
 }
 
+async function prepareDeclarativeStarter(root, namespace) {
+  const helper = path.join(root, 'src/supacharger/declarative-namespace.cjs');
+  if (await fs.stat(helper).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; })) {
+    require(helper).prepareStarterSchemas(root, namespace === undefined ? await readProjectNamespace(root) : namespace);
+  }
+}
+
 async function configureEnvironment(root, options = {}) {
   const examplePath = path.join(root, '.env.local.example');
   const destinationPath = path.join(root, '.env.local');
+  let environmentExists = false;
   try {
     await fs.access(destinationPath);
-    console.log(copy.Existing.replace('{path}', destinationPath));
-    return { created: false, path: destinationPath };
+    environmentExists = true;
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
+  }
+  if (environmentExists) {
+    // Resumed installs retain their existing namespace and secrets, but still
+    // render an unprepared starter using the configured PROJECT_NAMESPACE.
+    await prepareDeclarativeStarter(root, options.namespace);
+    console.log(copy.Existing.replace('{path}', destinationPath));
+    return { created: false, path: destinationPath };
   }
 
   // Resolve the naming contract before saving a choice. Never create secrets
   // under a default prefix after namespace configuration has failed.
   const { resourceName } = require(path.join(root, 'src/supacharger/namespace.cjs'));
   const prompts = options.prompts ?? await loadPrompts();
-  const namespace = await configureProjectNamespace(root, prompts);
-  const declarativeHelper = path.join(root, 'src/supacharger/declarative-namespace.cjs');
-  if (await fs.stat(declarativeHelper).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; })) {
-    require(declarativeHelper).prepareStarterSchemas(root);
-  }
+  const namespace = options.namespace === undefined
+    ? await configureProjectNamespace(root, prompts) : options.namespace;
+  await prepareDeclarativeStarter(root, namespace);
   const imageSecretName = resourceName(namespace, 'image_upload_signing_secret', 'secret');
 
   let contents;
@@ -172,6 +204,9 @@ async function configureEnvironment(root, options = {}) {
 
 module.exports = {
   configureEnvironment,
+  setProjectNamespace,
+  readProjectNamespace,
+  loadPrompts,
   configureProjectNamespace,
   generateSecret,
   namespaceReplacement,

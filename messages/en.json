@@ -101,7 +101,9 @@
     "CoreInstalledStatus": "Core was installed, but environment, skills and extension setup did not finish.",
     "CoreNotInstalledStatus": "Core was not installed.",
     "Failed": "Supacharger setup could not be completed: {reason}",
-    "UnexpectedFailure": "An unexpected error occurred during Supacharger setup. No additional error information was provided."
+    "UnexpectedFailure": "An unexpected error occurred during Supacharger setup. No additional error information was provided.",
+    "NamespaceOption": "Project code (1–6 lowercase letters, digits or underscores; starts with a letter). Omit in non-interactive mode for sc_.",
+    "DatabaseStarterMissing": "This Core release lacks the verified fresh database starter. Use a compatible Core release; historical SQL has not been installed."
   },
   "EnvironmentSetupCli": {
     "NamespaceHeading": "Project namespace",
@@ -256,5 +258,17 @@
     "Update": "Update the CLI with: {command}",
     "MissingLock": "Cannot verify Core compatibility: no .supacharger/core-lock.json was found.",
     "Unregistered": "Cannot verify Core compatibility: {version} is not a registered Core release. Use a registered version, tag or commit."
+  },
+  "DeclarativeDatabaseCli": {
+    "SymbolicLink": "Database definitions must not contain symbolic links.",
+    "Conflict": "Core and the project both changed {path}. Resolve the database definition conflict before updating; no history was replaced.",
+    "Unsupported": "Unsupported declarative database distribution contract.",
+    "MissingBaseline": "The installed Core baseline has no declarative definitions. Adopt and verify the database baseline before this Core update.",
+    "DataUpgrade": "This Core change requires an explicit data-upgrade review. Only migrations recorded with an exact checksum in schemaOnlyUpgrades may be replaced by generated structural SQL; bootstrap changes and unclassified migrations are never skipped.",
+    "HistoryChanged": "Published Core migration changed: {path}. Existing history was preserved.",
+    "NamespaceMismatch": "The configured PROJECT_NAMESPACE does not match the installed Core schema. Changing an installed namespace is unsupported.",
+    "PendingMismatch": "An unfinished database update differs from this target or its saved migration. Finish and verify that update before proceeding.",
+    "Plan": "Database definitions to merge: {count}. Existing migration history is preserved; native sync generates a project-specific forward migration.",
+    "Review": "Review the generated SQL before continuing. It can include pending project changes as well as Core changes. The incoming Core migration chain has not been copied."
   }
 }

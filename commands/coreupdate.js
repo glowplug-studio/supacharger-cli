@@ -1,3 +1,4 @@
+const { collectSchemas, planDatabaseUpdate, applyDatabaseUpdate, generateProjectMigration, completeDatabaseUpdate } = require('./common/declarative-database');
 const { exec } = require('child_process');
 const fs = require('fs/promises');
 const path = require('path');
@@ -1135,7 +1136,8 @@ async function assessPostUpdateWork(rootDir, updateDir, options = {}) {
   const changedMigrations = [];
   const satisfiedMigrationAliases = [];
 
-  for (const migration of incomingMigrations) {
+  const declarative = await planDatabaseUpdate(rootDir, updateDir, options);
+  for (const migration of declarative ? [] : incomingMigrations) {
     const incomingContents = await fs.readFile(path.join(updateDir, migration));
     if (options.baselineMigrationContents?.has(migration)) {
       if (!options.baselineMigrationContents.get(migration).equals(incomingContents)) {
@@ -1170,6 +1172,7 @@ async function assessPostUpdateWork(rootDir, updateDir, options = {}) {
     incomingFiles,
     changedMigrations,
     satisfiedMigrationAliases,
+    declarative,
   };
 }
 
@@ -1358,7 +1361,8 @@ async function runPostUpdateSteps(rootDir, assessment, options = {}) {
   const run = options.run ?? execCommand;
   const confirm = options.confirm ?? askYesNo;
   await mergeDependencyContract(rootDir, assessment.incomingPackage);
-  await installForwardOnlyMigrations(rootDir, assessment);
+  if (assessment.declarative) await applyDatabaseUpdate(rootDir, assessment.declarative);
+  else await installForwardOnlyMigrations(rootDir, assessment);
   await verifyPostUpdateFiles(rootDir, assessment);
 
   if (assessment.dependencyChanged) {
@@ -1368,6 +1372,10 @@ async function runPostUpdateSteps(rootDir, assessment, options = {}) {
     await run(installCommand, { cwd: rootDir });
   }
 
+  if (assessment.declarative) {
+    assessment.changedMigrations = await generateProjectMigration(rootDir, assessment.declarative, run);
+    if (assessment.changedMigrations.length) console.log(require('../messages/en.json').DeclarativeDatabaseCli.Review);
+  }
   if (assessment.changedMigrations.length === 0) return true;
 
   console.log('\x1b[33mThe core update adds these Supacharger migration files:\x1b[0m');
@@ -1398,6 +1406,7 @@ async function runPostUpdateSteps(rootDir, assessment, options = {}) {
       throw new Error(`Supabase did not report migration ${migration.path} in the linked migration ledger.`);
     }
   }
+  if (assessment.declarative) await completeDatabaseUpdate(rootDir);
   return true;
 }
 
@@ -1680,6 +1689,8 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     baselineDir,
     baselineManifest?.forwardOnlyMigrationPaths ?? DEFAULT_MIGRATION_PATHS
   );
+  const baselineSchemaContents = await collectSchemas(baselineDir);
+  const baselineBootstrap = await readFileContents(path.join(baselineDir, 'src/supacharger/database-starter/bootstrap.sql'));
   const [
     baselineFiles,
     latestFiles,
@@ -1700,6 +1711,8 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     managedFiles(latestDir, latestManifest),
     assessPostUpdateWork(rootDir, latestDir, {
       baselineMigrationContents,
+      baselineSchemaContents,
+      baselineBootstrap: baselineBootstrap?.toString(),
       forwardOnlyMigrationPaths: latestManifest?.forwardOnlyMigrationPaths,
     }),
     migrateAccountAlignmentConfig(rootDir, { plan: true }),
@@ -1781,6 +1794,10 @@ async function printPlan(rootDir, installState, options = {}) {
     plan.removals.forEach((file) => console.log(`  REMOVE ${file}`));
     console.log(`Dependency contract changed: ${plan.assessment.dependencyChanged ? 'yes' : 'no'}`);
     plan.assessment.removedTestScripts.forEach((name) => console.log(cleanupMessages.RemovedTestScript.replace('{name}', name)));
+    if (plan.assessment.declarative) {
+      console.log(require('../messages/en.json').DeclarativeDatabaseCli.Plan.replace('{count}', plan.assessment.declarative.changes.length));
+      plan.assessment.declarative.changes.forEach(item => console.log(`  SCHEMA ${item.path}`));
+    }
     console.log(`Changed migrations: ${plan.assessment.changedMigrations.length}`);
     plan.assessment.changedMigrations.forEach(({ path: migration }) => console.log(`  MIGRATION ${migration}`));
     console.log(`Satisfied migration aliases: ${plan.assessment.satisfiedMigrationAliases.length}`);
@@ -1880,6 +1897,8 @@ Enter Y to continue: \u001b[0m`;
       updateDir,
       baselineManifest?.forwardOnlyMigrationPaths ?? DEFAULT_MIGRATION_PATHS,
     );
+    const baselineSchemaContents = await collectSchemas(updateDir);
+    const baselineBootstrap = await readFileContents(path.join(updateDir, 'src/supacharger/database-starter/bootstrap.sql'));
     const baselineMergeContents = await managedFileContents(updateDir, await walkFiles(updateDir));
     const baselineOwnershipTransitionContents = await allMergeManagedContents(updateDir, baselineManifest);
 
@@ -1945,6 +1964,8 @@ Enter Y to continue: \u001b[0m`;
       }
       const assessment = await assessPostUpdateWork(cwd, updateDir, {
         baselineMigrationContents,
+        baselineSchemaContents,
+        baselineBootstrap: baselineBootstrap?.toString(),
         forwardOnlyMigrationPaths: latestManifest?.forwardOnlyMigrationPaths,
       });
       const latestManagedContents = await managedFileContents(updateDir, latestManagedFiles);
@@ -2050,6 +2071,8 @@ Enter Y to continue: \u001b[0m`;
     }
     const assessment = await assessPostUpdateWork(cwd, updateDir, {
       baselineMigrationContents,
+      baselineSchemaContents,
+      baselineBootstrap: baselineBootstrap?.toString(),
       forwardOnlyMigrationPaths: latestManifest?.forwardOnlyMigrationPaths,
     });
     const latestManagedContents = await managedFileContents(updateDir, latestManagedFiles);

@@ -8,7 +8,7 @@ const AdmZip = require('adm-zip');
 
 const { prepareStarter } = require('./common/test-distribution');
 const { assertSupportedCore } = require('./common/core-compatibility');
-const { configureEnvironment } = require('./environment');
+const { configureEnvironment, configureProjectNamespace, setProjectNamespace, loadPrompts } = require('./environment');
 const { selectAvailableExtensions } = require('./extensions');
 const { loadCoreDescriptor, readLocation, REGISTRY_MANIFEST_URL } = require('./extensions/registry.cjs');
 const { runSetupPreview } = require('./setup-preview');
@@ -368,6 +368,9 @@ async function initialise(target = '.', options = {}) {
   let coreInstalled = false;
 
   try {
+    if (options.namespace !== undefined && (typeof options.namespace !== 'string' || (options.namespace !== '' && !/^[a-z][a-z0-9_]{0,5}$/.test(options.namespace)))) {
+      throw new Error(require('../messages/en.json').EnvironmentSetupCli.NamespaceInvalid);
+    }
     printInitialiseBanner();
     assertSafeTargetDirectory(resolvedTargetDir, cwd);
     await checkInitialiseDependencies({ run: options.dependencyRun });
@@ -400,6 +403,14 @@ async function initialise(target = '.', options = {}) {
     printInitialiseStep(4, copy.StepPrepare);
     await prepareStarter(preparedDir);
     await removeGitDir(preparedDir);
+    const namespace = options.namespace !== undefined
+      ? await setProjectNamespace(preparedDir, options.namespace)
+      : process.stdin.isTTY && process.stdout.isTTY
+        ? await configureProjectNamespace(preparedDir, await loadPrompts())
+        : await setProjectNamespace(preparedDir, '');
+    const databaseStarter = path.join(preparedDir, 'src/supacharger/database-starter.cjs');
+    if (!await pathExists(databaseStarter)) throw new Error(copy.DatabaseStarterMissing);
+    require(databaseStarter).prepareFreshDatabase(preparedDir, namespace);
 
     printInitialiseStep(5, copy.StepLock.replace('{version}', descriptor.version));
     await writeCoreLock(preparedDir, repository, commitHash, descriptor.version);
@@ -418,7 +429,7 @@ async function initialise(target = '.', options = {}) {
     transactionRoot = null;
 
     if (process.stdin.isTTY && process.stdout.isTTY) {
-      await configureEnvironment(resolvedTargetDir);
+      await configureEnvironment(resolvedTargetDir, { namespace });
       if (!options.skipSkills) {
         try {
           await require('./skills/installer.cjs').runSkills([], { root: resolvedTargetDir, throwOnCancel: true });

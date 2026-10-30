@@ -4,6 +4,9 @@
 
 ### Added
 
+- Explicit `init --namespace` selection and default `sc_` preparation now run before environment prompts, including non-interactive installation. Fresh starters receive a verified namespaced initial migration.
+- Declarative Core updates merge upstream and application definitions and generate a project-specific migration, preserving installed history and retaining unfinished update checksums until deployment is verified. Conflicts and unclassified data upgrades stop for review.
+
 - Declarative extension SQL payloads render the application namespace during installation; first setup renders Core starter definitions from the same configuration.
 
 - Initial installation resolves the exact Core repository and commit through the schema-2 registry, using Git when available or a checksum-verified ZIP otherwise.
@@ -15,6 +18,8 @@
 - `supacharger extension available` presents a numbered registry list, marks installed extensions and offers interactive selection; `extension list` remains an alias.
 
 ### Changed
+
+- Existing `.env.local` files preserve their secrets without skipping namespace rendering.
 
 - Initialisation now reports seven numbered stages in purple, explains destructive replacement in plain language, accepts explicit `Y` or `n`, and removes the development-only GitHub warning.
 - Initialisation now reports namespace-version incompatibility and unexpected failures without exposing internal stack traces.
