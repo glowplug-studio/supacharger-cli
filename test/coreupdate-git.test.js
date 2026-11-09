@@ -70,7 +70,7 @@ for (const drift of [false, true]) {
     git('add', '.'); git('commit', '-m', 'baseline');
     const baseline = git('rev-parse', 'HEAD');
     await fs.cp(source, project, { recursive: true, filter: (entry) => !entry.split(path.sep).includes('.git') });
-    await fs.writeFile(path.join(project, '.supacharger/core-lock.json'), JSON.stringify({ repository: 'glowplug-studio/supacharger', commit: baseline }));
+    await fs.writeFile(path.join(project, '.supacharger/core-lock.json'), JSON.stringify({ repository: 'glowplug-studio/supacharger', version: '0.0.1-alpha', commit: baseline }));
     if (drift) {
       await fs.writeFile(path.join(project, 'src/supacharger/version.txt'), 'local drift');
       await fs.writeFile(path.join(project, loader), 'custom artwork');
@@ -84,17 +84,26 @@ for (const drift of [false, true]) {
     git('add', '.'); git('commit', '-m', 'later');
     const later = git('rev-parse', 'HEAD');
     git('update-ref', 'refs/heads/main', requested);
-    // Move the branch after ls-remote resolves it, before the CLI clones/fetches.
+    // Move the branch when acquisition starts; the registry's commit must stay pinned.
     await fs.writeFile(path.join(bin, 'git'), `#!/usr/bin/env node
 const {spawnSync} = require('node:child_process');
 const args = process.argv.slice(2);
 const result = spawnSync('/usr/bin/git', args, {encoding:'utf8'});
-if (args[0] === 'ls-remote' && result.status === 0) {
+if (args[0] === 'clone' && result.status === 0) {
   const moved = spawnSync('/usr/bin/git', ['-C', process.env.CLI_TEST_REMOTE, 'update-ref', 'refs/heads/main', process.env.CLI_TEST_LATER]);
   if (moved.status !== 0) process.exit(99);
 }
 process.stdout.write(result.stdout || ''); process.stderr.write(result.stderr || ''); process.exit(result.status ?? 1);
 `, { mode: 0o755 });
+    const registryMock = path.join(root, 'registry.cjs');
+    await fs.writeFile(registryMock, `globalThis.fetch = async url => new Response(JSON.stringify(
+      String(url).endsWith('manifest.json')
+        ? { schemaVersion: 2, core: { name: 'supacharger', path: 'core/supacharger.json' }, extensions: [] }
+        : { schemaVersion: 2, name: 'supacharger', github_repo_url: 'https://github.com/glowplug-studio/supacharger',
+            version: '0.0.1-alpha', source_commit: '${requested}', dependencies: [],
+            download_url: 'https://github.com/glowplug-studio/supacharger/archive/${requested}.zip',
+            archive_checksum: { algorithm: 'sha256', format: 'zip', value: '${'0'.repeat(64)}' } }
+    ));`);
     const env = {
       ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`,
       GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.file://${source}.insteadOf`,
@@ -102,7 +111,7 @@ process.stdout.write(result.stdout || ''); process.stderr.write(result.stderr ||
       GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
       CLI_TEST_REMOTE: source, CLI_TEST_LATER: later,
     };
-    const child = spawn(process.execPath, [path.resolve(__dirname, '../bin/cli.js'), 'coreupdate', '--ref', 'main'], { cwd: project, env });
+    const child = spawn(process.execPath, ['--require', registryMock, path.resolve(__dirname, '../bin/cli.js'), 'coreupdate', '--ref', requested], { cwd: project, env });
     t.after(() => { if (child.exitCode === null) child.kill(); });
     let output = ''; let started = false; let conflictAnswered = false;
     const collect = (chunk) => {

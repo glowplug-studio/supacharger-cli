@@ -76,7 +76,10 @@
     "DependencyHeading": "Checking installation prerequisites",
     "DependencyMet": "[X]",
     "DependencyNotMet": "[ ]",
-    "DependencyNode": "Node.js {version} — currently running the Supacharger CLI",
+    "DependencyNode": "Node.js",
+    "DependencyChecked": "{name} — checked and available ({version})",
+    "DependencyMissingLine": "Missing: {detail}",
+    "DependencyVersionUnknown": "version not reported",
     "DependencyNpm": "npm",
     "DependencyNpx": "npx",
     "DependencyGit": "Git",
@@ -103,7 +106,12 @@
     "Failed": "Supacharger setup could not be completed: {reason}",
     "UnexpectedFailure": "An unexpected error occurred during Supacharger setup. No additional error information was provided.",
     "NamespaceOption": "Project code (1–6 lowercase letters, digits or underscores; starts with a letter). Omit in non-interactive mode for sc_.",
-    "DatabaseStarterMissing": "This Core release lacks the verified fresh database starter. Use a compatible Core release; historical SQL has not been installed."
+    "DatabaseStarterMissing": "This Core release lacks the verified fresh database starter. Use a compatible Core release; historical SQL has not been installed.",
+    "DependencyNodeMissing": "Node.js does not meet the required version: ^22.13.0 or >=24.0.0. Install a supported Node.js release.",
+    "InstallDependenciesQuestion": "Install the application packages now? These are needed for extension preparation and later Supabase setup.",
+    "DependenciesSkipped": "Application packages were not installed. Run npm ci (or npm install without a lockfile) before preparing extensions or continuing Supabase setup.",
+    "InstallDependenciesRunning": "Running {command} in the new application. This installs project packages and runs their installation scripts.",
+    "DependenciesFailed": "Application package installation did not finish. Core remains installed. Fix the npm error shown above, then run npm ci (or npm install without a lockfile) in the application before continuing setup."
   },
   "EnvironmentSetupCli": {
     "NamespaceHeading": "Project namespace",
@@ -132,6 +140,16 @@
     "MissingExample": "Cannot create .env.local because the installed Core example is missing: {path}",
     "Created": "Created environment file: {path}"
   },
+  "StripeAgentToolsCli": {
+    "Question": "Set up Stripe CLI agent tooling and Stripe MCP for supported coding agents?",
+    "Missing": "Stripe CLI is not installed. Install it manually with npm install -g @stripe/cli@latest, then run stripe agent setup. See https://docs.stripe.com/mcp.",
+    "Found": "Stripe CLI is available ({version}).",
+    "VersionUnknown": "version not reported",
+    "Running": "Running stripe agent setup. Stripe detects supported coding agents and asks before changing their configuration.",
+    "Complete": "Stripe agent tooling and MCP configuration completed. Authenticate from the coding agent when first using Stripe; open any OAuth authorisation link yourself.",
+    "Failed": "stripe agent setup exited with status {status}",
+    "OptionalFailed": "Optional Stripe agent setup was not completed: {reason}. Retry with stripe agent setup."
+  },
   "SetupPreviewCli": {
     "Heading": "Planned Supabase application setup",
     "Introduction": "These questions preview the work a future CLI release will perform. Your answers are not saved and no services, files or projects are changed.",
@@ -153,7 +171,12 @@
     "IndexingQuestion": "Should search engines be allowed to index this application?",
     "FaviconQuestion": "Should Supacharger's standard favicon manifest be enabled?",
     "ColourSchemeQuestion": "Which browser colour scheme should the application declare?",
-    "ColourSchemeChoices": ["normal", "light", "dark", "light dark"],
+    "ColourSchemeChoices": [
+      "normal",
+      "light",
+      "dark",
+      "light dark"
+    ],
     "ThemeColourQuestion": "Theme colour — enter one CSS colour, or press Enter to omit the theme-colour tag",
     "OgUrlQuestion": "Default social-preview image URL — press Enter to omit the default image",
     "OgAltQuestion": "Default social-preview image alternative text",
@@ -168,7 +191,12 @@
     "PlusAddressingQuestion": "Should email addresses containing plus aliases be accepted?",
     "ResendCooldownQuestion": "How many seconds must users wait before resending an authentication email?",
     "PasswordPolicyQuestion": "Which built-in password character policy should Supacharger enforce?",
-    "PasswordPolicyChoices": ["no_required", "letters_digits", "lower_upper_letters_digits", "lower_upper_letters_digits_symbols"],
+    "PasswordPolicyChoices": [
+      "no_required",
+      "letters_digits",
+      "lower_upper_letters_digits",
+      "lower_upper_letters_digits_symbols"
+    ],
     "MinimumLengthQuestion": "What minimum password length should Supacharger enforce?",
     "PasswordRegexQuestion": "Additional password regular expression — press Enter for none",
     "AuthPolicyAction": "WRITE\n  Set SUPABASE_AUTH.METHODS.PASSWORDLESS_EMAIL.OTP_LENGTH to {otpLength}.\n  Set SUPABASE_AUTH.EMAIL.ALLOW_PLUS_ADDRESSING to {plusAddressing}.\n  Set SUPABASE_AUTH.EMAIL.RESEND_COOLDOWN_SECONDS to {resendCooldown}.\n  Set SUPABASE_AUTH.PASSWORD.REQUIREMENTS to '{passwordPolicy}'.\n  Set SUPABASE_AUTH.PASSWORD.MINIMUM_LENGTH to {minimumLength}.\n  Set SUPABASE_AUTH.PASSWORD.CUSTOM_REGEX to {passwordRegex}.\n\nSUPABASE ALIGNMENT\n  Set auth.email.otp_length in supabase/config.toml and the hosted Supabase Email OTP length to {otpLength}.\n\nVERIFY\n  Compile the custom regular expression before writing and reject invalid or unsafe values.",
@@ -176,8 +204,15 @@
     "UsernameQuestion": "Should user names be disabled, optional or required?",
     "AvatarQuestion": "Should user avatars be disabled or optional?",
     "HeaderImageQuestion": "Should user header images be disabled or optional?",
-    "ProfileRequirementChoices": ["disabled", "optional", "required"],
-    "MediaRequirementChoices": ["disabled", "optional"],
+    "ProfileRequirementChoices": [
+      "disabled",
+      "optional",
+      "required"
+    ],
+    "MediaRequirementChoices": [
+      "disabled",
+      "optional"
+    ],
     "OnboardingQuestion": "Should users complete profile onboarding after signing in?",
     "OnboardingPathQuestion": "Profile-onboarding route",
     "ProfileAction": "WRITE\n  Set AUTH_ONLY_APP to {authOnly}.\n  Set PROFILE_IDENTITY.USERNAME to '{username}'.\n  Set PROFILE_IDENTITY.AVATAR to '{avatar}'.\n  Set PROFILE_IDENTITY.HEADER_IMAGE to '{headerImage}'.\n  Set POST_SIGN_IN_ONBOARDING.REQUIRED to {onboarding}.\n  Set POST_SIGN_IN_ONBOARDING.REDIRECT_PATH to '{onboardingPath}'.\n\nVERIFY\n  Confirm required profile fields have a reachable onboarding route outside the onboarding guard.",
@@ -224,8 +259,14 @@
     "SummaryHeading": "Setup preview complete",
     "Summary": "Local Supabase: {local}\nHosted Supabase: {hosted}\nLaunch after setup: {launch}\nNo answers were saved and no proposed actions were performed."
   },
-  "VersionCli": {
-    "Description": "Show the installed Supacharger Core version from this directory or its parents",
+  "WhichCli": {
+    "Description": "Show the selected Supacharger Core or registered extension version",
+    "Core": "Show the installed Supacharger Core version",
+    "Extension": "Show an extension's currently published registry version",
+    "TargetRequired": "Choose one target: supacharger which --core or supacharger which --extension <name>.",
+    "OneTarget": "Choose either --core or --extension, not both.",
+    "ExtensionNotFound": "Extension is not present in the registry: {name}",
+    "ExtensionUnpublished": "Extension is registered but has no published version: {name}",
     "NotFound": "No Supacharger Core installation was found in this directory or its parents.",
     "UnsafeLock": "Core lock must be a regular file and not a symbolic link: {path}",
     "InvalidLock": "Core lock is invalid: {path}"
@@ -238,18 +279,22 @@
     "InvalidSelection": "Enter N or one of the listed extension numbers.",
     "AlreadyInstalled": "{name} is already installed.",
     "NotPublished": "{name} is registered but does not have a published install release yet.",
-    "SourceRequired": "{name} is published. Install it with: supacharger extension install {name} --source <directory>",
-    "InitialisePrompt": "Select extensions to install later (Space selects; Enter confirms; empty skips)",
-    "InitialiseDeferred": "Extension selection preview complete. No extensions were downloaded or installed.",
+    "InitialisePrompt": "Install transactional email? (Space selects; Enter confirms; empty skips)",
     "InitialiseFailed": "Optional extension selection was not completed: {reason}. Retry with supacharger extension available.",
-    "Install": "Copy a reviewed local bundle into its declared project destinations",
-    "Source": "Local extension repository or extracted bundle directory",
+    "Install": "Install a verified registry release or reviewed local extension bundle",
+    "Source": "Optional local source; omit to download the registered release ZIP",
     "Root": "Target Supacharger application directory",
     "Plan": "Validate and show file writes without changing the project",
     "Doctor": "Compare installed extension files with the supplied update directory",
-    "Update": "Compare original and incoming local releases, then update unchanged installed files",
+    "Update": "Compare and apply a verified registry release or reviewed local bundle",
     "Registry": "Registry manifest URL or local manifest path",
-    "Downloads": "The registry supplies Core and extension source metadata."
+    "Downloads": "The registry supplies Core and extension source metadata.",
+    "InitialiseInstalled": "Installed {name}. Complete its configuration using {guide}.",
+    "DoctorOption": "Compare an extension instead of Core (short ID or full registry name)",
+    "DoctorMatched": "No extension-managed file differences found for {name}.",
+    "DoctorDifferences": "File differences found for {name}; no files were changed.",
+    "DoctorScope": "Developer configuration is preserved. Deployment and service availability were not checked.",
+    "DoctorRefUnsupported": "--ref selects a Core release and cannot be combined with --extension. Use --source for a specific extension bundle."
   },
   "CoreCompatibility": {
     "Unsupported": "Core version {version} is not supported by this CLI.",

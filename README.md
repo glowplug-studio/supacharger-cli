@@ -8,7 +8,7 @@ Developer CLI for installing and safely updating Supacharger applications.
 
 `supacharger doctor` is read-only. It downloads the Core revision recorded in `.supacharger/core-lock.json` and the requested incoming revision, then compares their managed files directly with the project. It reports local modifications or missing files separately from incoming additions, updates and removals. It parses the developer-owned `src/supacharger.config.ts` with the TypeScript compiler and compares exact nested configuration paths with the incoming Core template. Dynamic or unresolved configuration causes an explicit incomplete-inspection result. It stores no file hashes, changes no project files and contacts no database.
 
-`supacharger version` walks upwards from the current directory to the nearest `.supacharger/core-lock.json` and prints its installed Core release version. The registry-based installer writes the release version and exact source commit into this lock. Use `supacharger --version` for the CLI package version.
+`supacharger which --core` walks upwards from the current directory to the nearest `.supacharger/core-lock.json` and prints its installed Core release version. `supacharger which --extension <name>` prints that extension's currently published registry version; installed extension version tracking will follow the extension registry refactor. The registry-based installer writes the Core release version and exact source commit into its lock. Use `supacharger --version` for the CLI package version.
 
 This CLI supports Core `>=0.0.1-alpha <0.0.2`, including `0.0.1` prereleases. Every application command checks the nearest `.supacharger/core-lock.json` before running. Initialisation checks the registry release before preparing files; Core updates and doctor also check the incoming registered release. Missing, invalid or unsupported versions stop the command and display `npm install -g @glowplug/supacharger-cli@latest`. Help and `supacharger --version` remain available without an installation.
 
@@ -126,7 +126,7 @@ Initial setup copies the tracked `public/images/email-template/email-logo.png` f
 
 ## Reviewed local extension bundles
 
-`supacharger extension available` reads the schema-2 registry, numbers every registered extension, marks installed extension entry files and offers interactive selection. `supacharger extension list` remains an alias. `supacharger extension install <id> --source <directory> [--plan]` and `supacharger extension doctor <id>` retain the reviewed local-source workflow; they do not yet download private extension releases or implement entitlement checks. Check installed CLI help before using these commands with an older npm release.
+`supacharger extension available` reads the schema-2 registry, numbers every registered extension, marks an extension installed when its entry, configuration, installation guide and agent guide are present and offers interactive selection. `supacharger extension list` remains an alias. `supacharger extension install <id> --source <directory> [--plan]` and `supacharger extension doctor <id> --source <directory>` retain the reviewed local-source workflow; they do not yet download private extension releases or implement entitlement checks. Check installed CLI help before using these commands with an older npm release.
 
 Schema 3 maps `payload/app/` into `src/app/(project)/(extensions)/(sc_extensions)/(<id>)/`, `payload/supabase/shared/` into `supabase/functions/_shared/extensions/sc_ext-<id>/`, namespaced function payloads into `supabase/functions/`, and forward SQL into the flat `supabase/migrations/` directory. `payload/docs/` maps to `docs/extensions/<id>/` and must include INSTALL.md. Source and target paths must match the canonical mapping.
 
@@ -138,7 +138,7 @@ Core updates configure the managed `profile-media` Edge Function for public requ
 
 ## Local release comparison
 
-Versioned extension fetching is **coming soon**. List the registry, then use reviewed local source folders with a CLI build containing these commands:
+Extensions can be downloaded from their registered GitHub ZIP releases, or supplied with `--source` for local review:
 
 ```sh
 supacharger extension available
@@ -149,6 +149,14 @@ supacharger extension update supacharger-ext-brevo --source /path/to/new-release
 Remove `--plan` to apply the listed changes. The CLI compares each installed destination directly with its incoming payload file. Equal files are skipped; differing extension-owned files are replaced. Developer configuration is preserved, existing migrations must match exactly, and unlisted project files are left alone. This comparison does not infer whether a difference is a local customisation or an upstream change; inspect the plan and Git diff before applying an update.
 
 
-The CLI uses the public schema-2 registry manifest by default. `--registry <URL-or-path>` can select another schema-2 manifest for development. Each manifest points to separate Core and extension descriptors. Published extension verification requires a clean local Git checkout at the descriptor's exact source commit. Until an extension descriptor publishes its version and commit, local installation reports `registryRegistered: true` and `registryVerified: false`.
+The CLI uses the public schema-2 registry manifest by default. `--registry <URL-or-path>` can select another schema-2 manifest for development. Each manifest points to separate Core and extension descriptors. For `--source`, published extension verification requires a clean local Git checkout at the descriptor's exact source commit. Downloads instead verify the registry's ZIP checksum. Until an extension descriptor publishes its version and commit, local installation reports `registryRegistered: true` and `registryVerified: false`.
 
 Dependency checks inspect the standard installed entry and configuration files. Missing source and disabled configuration stop installation. Required Core services resolve through the application configuration. Installation does not contact services, apply SQL, deploy workers or send email.
+
+Registry release downloads are supported without `--source`. The descriptor must supply a GitHub ZIP URL and SHA-256 checksum alongside its version and source commit. The ZIP must have one root directory containing an installable `extension.json` and payload. Prepared bundles must match the host namespace. The init picker offers transactional email only; unavailable releases and unmet dependencies are reported, not simulated. The configuration/Supabase demonstration wizard remains commented out pending implementation.
+
+Use `supacharger doctor --extension <name> [--source <path>] [--registry <location>] [--root <path>]` for extension comparison. Without `--source`, it downloads the registered release. The older `extension doctor` spelling remains supported. Differences are listed without writing files and return exit status 1; matching files return 0. Configuration and deployment are not checked by this comparison.
+
+Interactive init offers application-package installation after environment setup and before skills/extensions: `npm ci` with a lockfile, otherwise `npm install`. Skipping leaves package installation for later.
+
+Interactive init also offers optional Stripe agent tooling. The CLI checks for an existing Stripe CLI installation and, when available, runs Stripe's official `stripe agent setup` flow. It does not install the system CLI or open an OAuth page. If Stripe CLI is missing, install the latest release with `npm install -g @stripe/cli@latest`, then run `stripe agent setup`; see [Stripe MCP](https://docs.stripe.com/mcp).

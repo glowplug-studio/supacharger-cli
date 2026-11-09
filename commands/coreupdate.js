@@ -370,7 +370,13 @@ function signOutPolicyAssessment(source, { target = false } = {}) {
 async function migrateSignOutPolicyConfig(rootDir, options = {}) {
   if (!options.sourceRoot) throw new Error('A target Core source is required for sign-out policy migration.');
   const targetPath = path.join(options.sourceRoot, 'src', 'supacharger.config.ts');
-  const targetSource = await fs.readFile(targetPath, 'utf8');
+  let targetSource;
+  try {
+    targetSource = await fs.readFile(targetPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
   if (!signOutPolicyAssessment(targetSource, { target: true })) return [];
   const configPath = path.join(rootDir, 'src', 'supacharger.config.ts');
   const source = await fs.readFile(configPath, 'utf8');

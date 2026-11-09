@@ -7,7 +7,7 @@ const { runCoreDevelopment } = require('../commands/coredev');
 const initialiseCommand = require('../commands/initialise');
 const coreupdateCommand = require('../commands/coreupdate');
 const doctorCommand = require('../commands/doctor');
-const { printCoreVersion } = require('../commands/version');
+const { printSelectedVersion } = require('../commands/version');
 const { version } = require('../package.json');
 
 const { checkCommandCompatibility } = require('../commands/common/core-compatibility');
@@ -24,9 +24,12 @@ registerSkills(program);
 registerExtensions(program);
 
 program
-  .command('version')
-  .description(require('../messages/en.json').VersionCli.Description)
-  .action(() => printCoreVersion());
+  .command('which')
+  .description(require('../messages/en.json').WhichCli.Description)
+  .option('-c, --core', require('../messages/en.json').WhichCli.Core)
+  .option('-e, --extension <name>', require('../messages/en.json').WhichCli.Extension)
+  .option('--registry <location>', require('../messages/en.json').ExtensionsCli.Registry)
+  .action(options => printSelectedVersion(options));
 
 const coredev = program
   .command('coredev')
@@ -52,8 +55,17 @@ program
   .command('doctor')
   .description('Compare local managed files and configuration with installed and incoming Core')
   .option('--ref <tag-or-commit>', 'Registered Core version, tag or commit to inspect')
-  .option('--source <path>', 'Maintainer-only local Core checkout source')
-  .action((options) => doctorCommand(options));
+  .option('--source <path>', 'Local Core checkout or installable extension source')
+  .option('--extension <name>', require('../messages/en.json').ExtensionsCli.DoctorOption)
+  .option('--registry <location>', require('../messages/en.json').ExtensionsCli.Registry)
+  .option('--root <path>', require('../messages/en.json').ExtensionsCli.Root)
+  .action((options) => {
+    if (options.extension) {
+      if (options.ref) throw new Error(require('../messages/en.json').ExtensionsCli.DoctorRefUnsupported);
+      return require('../commands/extensions/update.cjs').reportExtensionDoctor(options.extension, options);
+    }
+    return doctorCommand(options);
+  });
 
 program
   .command('init [target]')
@@ -63,7 +75,15 @@ program
   .option('--registry <location>', require('../messages/en.json').ExtensionsCli.Registry)
   .action((target, options) => initialiseCommand(target ?? '.', options));
 
-program.parseAsync(process.argv).catch(error => { console.error(error.message); process.exitCode = 1; });
+program.parseAsync(process.argv).catch(error => {
+  if (error?.name === 'ExitPromptError' || error?.code === 'ABORT_ERR' || error?.code === 'USER_CANCELLED') {
+    console.log(require('../messages/en.json').InitialiseCli.CancelledBeforeInstall);
+    process.exitCode = 130;
+    return;
+  }
+  console.error(typeof error?.message === 'string' && error.message.trim() ? error.message : require('../messages/en.json').InitialiseCli.UnexpectedFailure);
+  process.exitCode = 1;
+});
 
 if (!process.argv.slice(2).length) {
   program.help();

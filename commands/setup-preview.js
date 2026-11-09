@@ -1,3 +1,10 @@
+// Disabled from init for release. Preserve these prompts until their actions exist.
+// TODO: write and validate SC_CONFIG fields while preserving developer configuration.
+// TODO: install/check the project-pinned Supabase CLI; implement local start and hosted linking.
+// TODO: configure Auth methods, verification, hooks, email transport and templates with explicit consent.
+// TODO: deploy reviewed migrations/functions and provision media/secrets without logging credentials.
+// TODO: configure MCP through the user's agent, then install dependencies, check readiness and launch port 3000.
+// TODO: persist completed setup steps so resuming never repeats destructive work.
 const copy = require('../messages/en.json').SetupPreviewCli;
 
 const COLOURS = {

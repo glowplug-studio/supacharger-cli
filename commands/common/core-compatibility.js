@@ -42,14 +42,14 @@ async function prepareCoreTarget(options = {}) {
 }
 
 async function checkCommandCompatibility(command) {
-  if (command.name() === 'init') return; // Check the actual descriptor inside init, before preparing files.
+  if (command.name() === 'init' || command.name() === 'which') return; // These commands inspect or establish version state themselves.
   const options = command.opts();
   const installation = await checkLocalCore(options.root || process.cwd());
   // Resolve user paths before normalising the working directory.
   if (options.source) command.setOptionValue('source', path.resolve(options.source));
   if (options.registry && !/^https:\/\//.test(options.registry)) command.setOptionValue('registry', path.resolve(options.registry));
   if (options.root) command.setOptionValue('root', installation.directory);
-  else process.chdir(installation.directory);
+  process.chdir(installation.directory);
 }
 
 module.exports = { SUPPORTED_CORE_RANGE, assertSupportedCore, checkLocalCore, prepareCoreTarget, checkCommandCompatibility };

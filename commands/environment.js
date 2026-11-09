@@ -149,13 +149,6 @@ async function loadPrompts() {
   return { confirm, input, password };
 }
 
-async function prepareDeclarativeStarter(root, namespace) {
-  const helper = path.join(root, 'src/supacharger/declarative-namespace.cjs');
-  if (await fs.stat(helper).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; })) {
-    require(helper).prepareStarterSchemas(root, namespace === undefined ? await readProjectNamespace(root) : namespace);
-  }
-}
-
 async function configureEnvironment(root, options = {}) {
   const examplePath = path.join(root, '.env.local.example');
   const destinationPath = path.join(root, '.env.local');
@@ -167,9 +160,6 @@ async function configureEnvironment(root, options = {}) {
     if (error?.code !== 'ENOENT') throw error;
   }
   if (environmentExists) {
-    // Resumed installs retain their existing namespace and secrets, but still
-    // render an unprepared starter using the configured PROJECT_NAMESPACE.
-    await prepareDeclarativeStarter(root, options.namespace);
     console.log(copy.Existing.replace('{path}', destinationPath));
     return { created: false, path: destinationPath };
   }
@@ -179,8 +169,7 @@ async function configureEnvironment(root, options = {}) {
   const { resourceName } = require(path.join(root, 'src/supacharger/namespace.cjs'));
   const prompts = options.prompts ?? await loadPrompts();
   const namespace = options.namespace === undefined
-    ? await configureProjectNamespace(root, prompts) : options.namespace;
-  await prepareDeclarativeStarter(root, namespace);
+    ? await readProjectNamespace(root) : options.namespace;
   const imageSecretName = resourceName(namespace, 'image_upload_signing_secret', 'secret');
 
   let contents;

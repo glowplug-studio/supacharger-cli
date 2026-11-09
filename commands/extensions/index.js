@@ -1,8 +1,8 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 
-const { doctor } = require('./installer.cjs');
-const { runExtension, normaliseId } = require('./update.cjs');
+const { safePath } = require('./installer.cjs');
+const { runExtension, reportExtensionDoctor, normaliseId } = require('./update.cjs');
 const { loadExtensionRegistry, REGISTRY_MANIFEST_URL, versionPattern } = require('./registry.cjs');
 const copy = require('../../messages/en.json').ExtensionsCli;
 const DEFAULT_EXTENSION = 'supacharger-ext-transactional-email';
@@ -22,10 +22,13 @@ function installedLabel() {
 async function installedExtensions(root, names) {
   const installed = new Set();
   await Promise.all(names.map(async name => {
-    const entry = path.join(root, 'src/app/(project)/(extensions)/(sc_extensions)', `(${normaliseId(name)})`, 'index.ts');
+    const id = normaliseId(name);
+    const base = `src/app/(project)/(extensions)/(sc_extensions)/(${id})`;
+    const files = [`${base}/index.ts`, `${base}/${name}.config.ts`,
+      `docs/extensions/${id}/INSTALL.md`, `docs/agents/extensions/${name}/AGENTS.md`];
     try {
-      await fs.access(entry);
-      installed.add(name);
+      const states = await Promise.all(files.map(async file => (await fs.stat(await safePath(root, file))).isFile()));
+      if (states.every(Boolean)) installed.add(name);
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
     }
@@ -35,17 +38,17 @@ async function installedExtensions(root, names) {
 
 async function askAvailableExtension(names) {
   const readline = require('node:readline/promises').createInterface({ input: process.stdin, output: process.stdout });
-  try { return (await readline.question(`\n${copy.InstallQuestion}`)).trim(); }
+  try { return (await readline.question(`\n${copy.InstallQuestion}\n`)).trim(); }
   finally { readline.close(); }
 }
 
 async function selectAvailableExtensions({ root = process.cwd(), registry = REGISTRY_MANIFEST_URL } = {}) {
   const { entries } = await loadExtensionRegistry(registry);
-  const names = [...entries.keys()];
+  const names = [...entries.keys()].filter(name => name === DEFAULT_EXTENSION);
   const installed = await installedExtensions(path.resolve(root), names);
   const { default: checkbox } = await import('@inquirer/checkbox');
   const selected = await checkbox({
-    message: copy.InitialisePrompt,
+    message: `${copy.InitialisePrompt}\n`,
     choices: names.map(name => ({
       name: `${extensionName(name)}${installed.has(name) ? ` ${installedLabel()}` : ''}`,
       value: name,
@@ -53,7 +56,10 @@ async function selectAvailableExtensions({ root = process.cwd(), registry = REGI
     })),
     required: false,
   });
-  console.log(copy.InitialiseDeferred);
+  for (const name of selected) {
+    const result = await runExtension('install', name, { root, registry });
+    console.log(copy.InitialiseInstalled.replace('{name}', name).replace('{guide}', result.guide));
+  }
   return selected;
 }
 
@@ -86,7 +92,7 @@ function registerExtensions(program) {
         console.log(copy.NotPublished.replace('{name}', name));
         return;
       }
-      console.log(copy.SourceRequired.replace('{name}', name));
+      console.log(JSON.stringify(await runExtension('install', name, { root, registry: options.registry }), null, 2));
     });
   for (const action of ['install', 'update']) {
     extension.command(`${action} <name>`).description(copy[action === 'install' ? 'Install' : 'Update'])
@@ -99,13 +105,14 @@ function registerExtensions(program) {
       });
   }
   extension.command('doctor <name>').description(copy.Doctor).option('--root <path>', copy.Root)
-    .requiredOption('--source <path>', copy.Source)
+    .option('--source <path>', copy.Source)
+    .option('--registry <location>', copy.Registry, REGISTRY_MANIFEST_URL)
     .action(async (name, options) => {
-      const result = await doctor(normaliseId(name), options);
-      console.log(JSON.stringify(result, null, 2));
-      if (!result.matchesSource) process.exitCode = 1;
+      await reportExtensionDoctor(name, options);
     });
 }
 
 module.exports = registerExtensions;
 module.exports.selectAvailableExtensions = selectAvailableExtensions;
+
+module.exports.installedExtensions = installedExtensions;

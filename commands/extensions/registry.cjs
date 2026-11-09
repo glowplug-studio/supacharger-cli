@@ -199,6 +199,42 @@ function publishedExtensionDescriptor(descriptor) {
   return versionPattern.test(descriptor.version) && commitPattern.test(descriptor.source_commit);
 }
 
+function verifyBundleMetadata(entry, bundle) {
+  if (entry.version !== bundle.version) throw new Error('Registry version does not match bundle');
+  if (JSON.stringify(entry.dependencies) !== JSON.stringify(bundle.dependencies || [])) throw new Error('Registry dependencies do not match bundle');
+  if (entry.provider_dependencies !== undefined && JSON.stringify(entry.provider_dependencies) !== JSON.stringify(bundle.provider_dependencies || {})) {
+    throw new Error('Registry provider dependencies do not match bundle');
+  }
+}
+
+/** Only checksum-verified archive bytes enter this path; no verification bypass flag. */
+async function withDownloadedRelease(name, registryLocation, callback) {
+  const { entries } = await loadExtensionRegistry(registryLocation);
+  const entry = entries.get(name);
+  if (!entry) throw new Error(`Extension is not registered: ${name}`);
+  if (!publishedExtensionDescriptor(entry) || entry.archive_checksum?.algorithm !== 'sha256' ||
+      entry.archive_checksum?.format !== 'zip' || !/^[a-f0-9]{64}$/.test(entry.archive_checksum?.value) ||
+      typeof entry.download_url !== 'string' || !/^https:\/\/github\.com\//.test(entry.download_url)) {
+    throw new Error(`${name} has no complete published release. Its registry entry needs a version, source commit, GitHub ZIP URL and SHA-256 checksum.`);
+  }
+  const bytes = await readLocation(entry.download_url, { maxBytes: 128 * 1024 * 1024, timeout: 60_000 });
+  if (require('node:crypto').createHash('sha256').update(bytes).digest('hex') !== entry.archive_checksum.value) {
+    throw new Error('Extension ZIP checksum does not match the registry');
+  }
+  const temporary = await fs.mkdtemp(path.join(require('node:os').tmpdir(), 'supacharger-extension-'));
+  try {
+    const source = path.join(temporary, 'source');
+    await require('../common/source-archive.cjs').extractSourceZip(bytes, source);
+    const { safePath, validateManifest } = require('./installer.cjs');
+    const manifest = JSON.parse(await fs.readFile(await safePath(source, 'extension.json'), 'utf8'));
+    validateManifest(manifest, name.slice(16));
+    verifyBundleMetadata(entry, manifest);
+    return await callback(source, manifest, { verified: true, registered: true, entry, entries });
+  } finally {
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
+}
+
 async function verifyRelease(source, bundle, registryLocation = REGISTRY_MANIFEST_URL, options = {}) {
   const { entries } = await loadExtensionRegistry(registryLocation, options);
   const entry = entries.get(bundle.name);
@@ -206,11 +242,7 @@ async function verifyRelease(source, bundle, registryLocation = REGISTRY_MANIFES
   if (!publishedExtensionDescriptor(entry)) {
     return { verified: false, registered: true, reason: 'The registered extension has no published release yet', entry, entries };
   }
-  if (entry.version !== bundle.version) throw new Error('Registry version does not match bundle');
-  if (JSON.stringify(entry.dependencies) !== JSON.stringify(bundle.dependencies || [])) throw new Error('Registry dependencies do not match bundle');
-  if (entry.provider_dependencies !== undefined && JSON.stringify(entry.provider_dependencies) !== JSON.stringify(bundle.provider_dependencies || {})) {
-    throw new Error('Registry provider dependencies do not match bundle');
-  }
+  verifyBundleMetadata(entry, bundle);
 
   let inventory;
   try {
@@ -244,5 +276,6 @@ module.exports = {
   sourceInventory,
   validateCoreDescriptor,
   verifyRelease,
+  withDownloadedRelease,
   versionPattern,
 };

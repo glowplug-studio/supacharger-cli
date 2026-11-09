@@ -4,14 +4,15 @@ const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const readline = require('readline');
-const AdmZip = require('adm-zip');
+const { extractSourceZip: extractCoreZip } = require('./common/source-archive.cjs');
 
 const { prepareStarter } = require('./common/test-distribution');
 const { assertSupportedCore } = require('./common/core-compatibility');
 const { configureEnvironment, configureProjectNamespace, setProjectNamespace, loadPrompts } = require('./environment');
 const { selectAvailableExtensions } = require('./extensions');
-const { loadCoreDescriptor, readLocation, REGISTRY_MANIFEST_URL } = require('./extensions/registry.cjs');
-const { runSetupPreview } = require('./setup-preview');
+const { loadCoreDescriptor, readLocation } = require('./extensions/registry.cjs');
+// TODO: enable only after configuration writes, Supabase provisioning and launch are implemented.
+// const { runSetupPreview } = require('./setup-preview');
 
 const INIT_BANNER_PRIMARY = [
   ' ▗▄▄▖▗▖ ▗▖▗▄▄▖  ▗▄▖  ▗▄▄▖▗▖ ▗▖ ▗▄▖ ▗▄▄▖  ▗▄▄▖▗▄▄▄▖▗▄▄▖',
@@ -47,7 +48,7 @@ function dependencyStatus(text, colourCode) {
 
 function execFileCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    execFile(command, args, { ...options, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile(command, args, { ...options, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) {
         error.stderr = stderr;
         reject(error);
@@ -79,6 +80,7 @@ async function checkInitialiseDependencies(options = {}) {
     inspectCommand('supabase', ['--version'], run),
   ]);
   const dependencies = [
+    { available: require('semver').satisfies(process.version, require('../package.json').engines.node), version: process.version, label: copy.DependencyNode, missing: copy.DependencyNodeMissing },
     { ...npm, label: copy.DependencyNpm, missing: copy.DependencyNpmMissing },
     { ...npx, label: copy.DependencyNpx, missing: copy.DependencyNpxMissing },
     { ...git, label: copy.DependencyGit, missing: copy.DependencyGitMissing },
@@ -87,12 +89,13 @@ async function checkInitialiseDependencies(options = {}) {
   ];
 
   console.log(`\n${copy.DependencyHeading}`);
-  console.log(`${dependencyStatus(copy.DependencyMet, '32')} ${copy.DependencyNode.replace('{version}', process.version)}`);
   for (const dependency of dependencies) {
     if (dependency.available) {
-      console.log(`${dependencyStatus(copy.DependencyMet, '32')} ${dependency.label}${dependency.version ? ` ${dependency.version}` : ''}`);
+      console.log(`${dependencyStatus(copy.DependencyMet, '32')} ${copy.DependencyChecked
+        .replace('{name}', dependency.label)
+        .replace('{version}', dependency.version || copy.DependencyVersionUnknown)}`);
     } else {
-      console.log(`${dependencyStatus(copy.DependencyNotMet, '33')} ${dependency.missing}`);
+      console.log(`${dependencyStatus(copy.DependencyNotMet, '33')} ${copy.DependencyMissingLine.replace('{detail}', dependency.missing)}`);
     }
   }
 
@@ -111,7 +114,13 @@ async function checkInitialiseDependencies(options = {}) {
 
 function askQuestion(question) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
+    rl.once('SIGINT', () => {
+      rl.close();
+      const error = new Error('Cancelled by user');
+      error.code = 'USER_CANCELLED';
+      reject(error);
+    });
     rl.question(question, answer => {
       rl.close();
       resolve(answer.trim());
@@ -248,52 +257,6 @@ async function checkoutCoreWithGit(descriptor, targetDir, run = execFileCommand)
   throw new Error(`Git could not download the registered Core repository: ${lastError?.stderr?.trim() || lastError?.message}`);
 }
 
-function safeArchivePath(entryName, rootName) {
-  if (!entryName || entryName.includes('\\') || entryName.includes('\0') || entryName.startsWith('/')) {
-    throw new Error('Core ZIP contains an unsafe path');
-  }
-  const parts = entryName.replace(/\/$/, '').split('/');
-  if (parts.some(part => !part || part === '.' || part === '..') || parts[0] !== rootName) {
-    throw new Error('Core ZIP contains an unsafe path');
-  }
-  return parts.slice(1).join('/');
-}
-
-async function extractCoreZip(archiveBytes, targetDir) {
-  const archive = new AdmZip(archiveBytes);
-  const entries = archive.getEntries();
-  if (entries.length === 0 || entries.length > 25_000) throw new Error('Core ZIP has an invalid file count');
-  const firstParts = entries.map(entry => entry.entryName.replace(/\/$/, '').split('/')[0]).filter(Boolean);
-  const rootName = firstParts[0];
-  if (!rootName || firstParts.some(name => name !== rootName)) throw new Error('Core ZIP must contain one root directory');
-
-  const seen = new Set();
-  let extractedBytes = 0;
-  await fs.mkdir(targetDir, { recursive: true });
-  for (const entry of entries) {
-    const relativePath = safeArchivePath(entry.entryName, rootName);
-    if (!relativePath) continue;
-    const key = relativePath.toLowerCase();
-    if (seen.has(key)) throw new Error(`Core ZIP contains a duplicate path: ${relativePath}`);
-    seen.add(key);
-
-    const mode = (entry.header.attr >>> 16) & 0xffff;
-    if ((mode & 0o170000) === 0o120000) throw new Error(`Core ZIP contains a symbolic link: ${relativePath}`);
-    const destination = path.resolve(targetDir, relativePath);
-    if (destination !== targetDir && !destination.startsWith(`${targetDir}${path.sep}`)) throw new Error('Core ZIP path escapes its target');
-    if (entry.isDirectory) {
-      await fs.mkdir(destination, { recursive: true });
-      continue;
-    }
-
-    const bytes = entry.getData();
-    extractedBytes += bytes.length;
-    if (extractedBytes > 512 * 1024 * 1024) throw new Error('Core ZIP expands beyond the supported size');
-    await fs.mkdir(path.dirname(destination), { recursive: true });
-    await fs.writeFile(destination, bytes, { mode: mode & 0o111 ? 0o755 : 0o644 });
-  }
-}
-
 async function downloadCoreZip(descriptor, targetDir, options = {}) {
   const archiveBytes = await readLocation(descriptor.download_url, {
     fetch: options.fetch,
@@ -411,6 +374,7 @@ async function initialise(target = '.', options = {}) {
     const databaseStarter = path.join(preparedDir, 'src/supacharger/database-starter.cjs');
     if (!await pathExists(databaseStarter)) throw new Error(copy.DatabaseStarterMissing);
     require(databaseStarter).prepareFreshDatabase(preparedDir, namespace);
+    require(path.join(preparedDir, 'src/supacharger/prepare-namespace.cjs')).prepareNamespace({ root: preparedDir, namespace });
 
     printInitialiseStep(5, copy.StepLock.replace('{version}', descriptor.version));
     await writeCoreLock(preparedDir, repository, commitHash, descriptor.version);
@@ -430,6 +394,13 @@ async function initialise(target = '.', options = {}) {
 
     if (process.stdin.isTTY && process.stdout.isTTY) {
       await configureEnvironment(resolvedTargetDir, { namespace });
+      await require('./project-dependencies.cjs').installProjectDependencies(resolvedTargetDir, await loadPrompts());
+      try {
+        await require('./stripe-agent-tools').configureStripeAgentTools(await loadPrompts());
+      } catch (error) {
+        if (isPromptCancellation(error) || error?.code === 'USER_CANCELLED') throw error;
+        console.warn(require('../messages/en.json').StripeAgentToolsCli.OptionalFailed.replace('{reason}', error.message));
+      }
       if (!options.skipSkills) {
         try {
           await require('./skills/installer.cjs').runSkills([], { root: resolvedTargetDir, throwOnCancel: true });
@@ -444,7 +415,8 @@ async function initialise(target = '.', options = {}) {
         if (isPromptCancellation(error)) throw error;
         console.warn(copyInitialiseExtensionFailure(error.message));
       }
-      await runSetupPreview();
+      // TODO: replace simulated actions with verified implementations before enabling.
+      // await runSetupPreview();
     }
 
     console.log('\x1b[32m✓ Initialise completed successfully. Review and commit the new application files.\x1b[0m');
