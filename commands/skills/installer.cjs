@@ -13,9 +13,11 @@ function message(key, values = {}) {
 }
 const exec = promisify(execFile);
 const REPOSITORY = 'glowplug-studio/glowplug-skills';
+const LOCAL_REPOSITORY = 'local/skills-source';
 const URL = `https://github.com/${REPOSITORY}.git`;
 const namePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const idPattern = /^(general|supacharger|specdrive)\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const repositoryPattern = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const plain = value => typeof value === 'string' && value.trim() && value.length <= 1024 && !/[\x00-\x1f\x7f]/.test(value);
 const skillName = value => process.stdout.isTTY && !process.env.NO_COLOR ? `\x1b[95m${value}\x1b[0m` : value;
@@ -35,6 +37,18 @@ function parseCatalogue(bytes) {
   }
   return catalogue.skills;
 }
+function repositoryFromRemote(remote) {
+  const match = /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/)([^/]+\/[^/]+?)(?:\.git)?$/.exec(remote);
+  return match && repositoryPattern.test(match[1]) ? match[1] : null;
+}
+async function localSourceRepository(root) {
+  try {
+    const remote = (await git(root, ['config', '--get', 'remote.origin.url'])).toString().trim();
+    return repositoryFromRemote(remote) || LOCAL_REPOSITORY;
+  } catch {
+    return LOCAL_REPOSITORY;
+  }
+}
 async function openSource({ source, ref = 'main' } = {}) {
   validateRef(ref);
   let temporary;
@@ -49,7 +63,8 @@ async function openSource({ source, ref = 'main' } = {}) {
     const commit = (await git(root, ['rev-parse', '--verify', `${source ? ref : 'FETCH_HEAD'}^{commit}`])).toString().trim();
     if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error(message('SkillsSourceDidNotResolveTo'));
     const skills = parseCatalogue(await git(root, ['show', `${commit}:catalogue.json`]));
-    return { root, commit, skills, close: async () => { if (temporary) await fs.rm(temporary, { recursive: true, force: true }); } };
+    const repository = source ? await localSourceRepository(root) : REPOSITORY;
+    return { root, commit, repository, skills, close: async () => { if (temporary) await fs.rm(temporary, { recursive: true, force: true }); } };
   } catch (error) {
     if (temporary) await fs.rm(temporary, { recursive: true, force: true });
     throw new Error(message('CannotReadPublicSkillsCatalogueValue', { value0: error.message }));
@@ -100,7 +115,7 @@ function parseLock(text) {
   const lock = JSON.parse(text);
   if (lock.version !== 1 || !lock.skills || typeof lock.skills !== 'object' || Array.isArray(lock.skills)) throw new Error(message('InvalidSkillsLock'));
   for (const [name, record] of Object.entries(lock.skills)) {
-    if (!namePattern.test(name) || !idPattern.test(record.id) || record.id.split('/')[1] !== name || record.repository !== REPOSITORY || !/^[a-f0-9]{40}$/.test(record.commit) || !record.files || typeof record.files !== 'object' || Array.isArray(record.files) || !record.files['SKILL.md']) throw new Error(message('InvalidSkillsLockEntry'));
+    if (!namePattern.test(name) || !idPattern.test(record.id) || record.id.split('/')[1] !== name || !repositoryPattern.test(record.repository) || !/^[a-f0-9]{40}$/.test(record.commit) || !record.files || typeof record.files !== 'object' || Array.isArray(record.files) || !record.files['SKILL.md']) throw new Error(message('InvalidSkillsLockEntry'));
     for (const [file, hash] of Object.entries(record.files)) if (!safeFile(file) || !/^[a-f0-9]{64}$/.test(hash)) throw new Error(message('InvalidSkillsLockFileHash'));
   }
   return lock;
@@ -148,6 +163,7 @@ async function installSelection(source, ids, { root = process.cwd(), update = fa
     // Re-read after acquiring the installer lock.
     const { lock, lockPath } = await inspectProject(project.root);
     const plans = [];
+    let lockChanged = false;
     for (const skill of selected) {
       const destination = path.join(project.root, '.agents/skills', skill.name);
       const info = await stat(destination);
@@ -155,6 +171,14 @@ async function installSelection(source, ids, { root = process.cwd(), update = fa
       if (info) {
         if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(message('RefusingUnsafeSkillDestinationValue', { value0: skill.name }));
         if (!previous || previous.id !== skill.id) throw new Error(message('ExistingSkillValueIsNotTracked', { value0: skill.name, value1: skill.id }));
+        if (previous.repository !== source.repository) {
+          const legacyLocalProvenance = previous.repository === REPOSITORY
+            && source.repository !== REPOSITORY
+            && previous.commit === source.commit;
+          if (!legacyLocalProvenance) throw new Error(message('SkillSourceMismatchValue', { value0: skill.name, value1: previous.repository, value2: source.repository }));
+          previous.repository = source.repository;
+          lockChanged = true;
+        }
         if (!equalHashes(await installedHashes(destination), previous.files)) throw new Error(message('LocalChangesInValueInstallationRefused', { value0: skill.name }));
         if (!update && previous.commit !== source.commit) throw new Error(message('ValueIsInstalledUseSkillsUpdate', { value0: skill.name, value1: skill.id }));
         if (previous.commit === source.commit) continue;
@@ -162,7 +186,7 @@ async function installSelection(source, ids, { root = process.cwd(), update = fa
       const files = await skillFiles(source, skill);
       plans.push({ skill, destination, files, existed: Boolean(info) });
     }
-    if (!plans.length) return [];
+    if (!plans.length && !lockChanged) return [];
     await fs.mkdir(path.join(project.root, '.agents/skills'), { recursive: true });
     transaction = await fs.mkdtemp(path.join(project.root, '.supacharger/skills-transaction-'));
     for (const [index, plan] of plans.entries()) {
@@ -175,7 +199,7 @@ async function installSelection(source, ids, { root = process.cwd(), update = fa
         await fs.writeFile(target, bytes, { mode, flag: 'wx' });
         hashes[file] = digest(bytes);
       }
-      lock.skills[plan.skill.name] = { id: plan.skill.id, repository: REPOSITORY, commit: source.commit, files: hashes };
+      lock.skills[plan.skill.name] = { id: plan.skill.id, repository: source.repository, commit: source.commit, files: hashes };
     }
     const stagedLock = path.join(transaction, 'skills-lock.json');
     await fs.writeFile(stagedLock, `${JSON.stringify(lock, null, 2)}\n`);
@@ -219,7 +243,13 @@ async function runSkills(ids = [], options = {}) {
           choices.push({ name: `${skillName(skill.name)} (${status})`, value: skill.id, description: skill.description, disabled: options.update ? (!exists || !record ? message('InstallFirst') : false) : (exists ? message('UseUpdate') : false) });
         }
       }
-      ids = await checkbox({ message: options.update ? message('UpdatePrompt') : message('InstallPrompt'), choices, required: false });
+      ids = await checkbox({
+        message: options.source
+          ? message(options.update ? 'LocalUpdatePrompt' : 'LocalInstallPrompt')
+          : message(options.update ? 'UpdatePrompt' : 'InstallPrompt'),
+        choices,
+        required: false,
+      });
     }
     const installed = await installSelection(source, ids, options);
     console.log(installed.length ? message(options.update ? 'UpdatedResult' : 'InstalledResult', { ids: installed.join(', '), commit: source.commit }) : message('NoChanges'));

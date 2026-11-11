@@ -8,6 +8,8 @@ Do not distribute or require Core contract tests in consuming applications. Keep
 
 Preserve locale configuration and every secondary-language catalogue during updates. The only catalogue merge permitted by default is adding a missing canonical English key or filling an empty English source value from Core; never replace existing non-empty product wording or invent secondary translations.
 
+The skills command defaults to the free public `glowplug-skills` catalogue. Licensed skills are available only from an authorised committed checkout supplied through `--source`. Record the checkout's actual GitHub repository and immutable commit in the generated skills lock, require the same source for updates and never relabel licensed provenance as the public repository.
+
 Treat `.supacharger/migration-aliases.json` as a developer-owned audit record for a reviewed, immutable consumer adaptation of a canonical forward migration. Validate every target, report mappings in the update plan and doctor output, and never infer equivalence from filenames alone.
 
 <!-- BEGIN:shared-bruno-rpc-guidance -->

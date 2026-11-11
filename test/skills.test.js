@@ -35,6 +35,33 @@ test('installs committed files with provenance, leaves uncommitted edits behind,
   assert.equal(await fs.readFile(path.join(f.skill, 'references/example.md'), 'utf8'), 'Original reference\n');
   assert.deepEqual(await install(f), []);
 });
+test('records the GitHub repository for a committed local licensed source', async t => {
+  const f = await fixture(t);
+  git(f.source, 'remote', 'add', 'origin', 'git@github.com:glowplug-studio/supacharger-license-skills.git');
+  await install(f);
+  const lock = JSON.parse(await fs.readFile(path.join(f.root, '.supacharger/skills-lock.json')));
+  assert.equal(lock.skills.changelog.repository, 'glowplug-studio/supacharger-license-skills');
+});
+test('refuses to update a tracked skill from a different repository', async t => {
+  const f = await fixture(t);
+  await install(f);
+  git(f.source, 'remote', 'add', 'origin', 'https://github.com/glowplug-studio/supacharger-license-skills.git');
+  await fs.appendFile(path.join(f.source, 'general/changelog/SKILL.md'), 'Different source revision\n');
+  f.commit();
+  await assert.rejects(install(f, { update: true }), /tracked from local\/skills-source/);
+});
+test('repairs legacy public provenance for an unchanged local licensed installation', async t => {
+  const f = await fixture(t);
+  await install(f);
+  const lockPath = path.join(f.root, '.supacharger/skills-lock.json');
+  const legacyLock = JSON.parse(await fs.readFile(lockPath));
+  legacyLock.skills.changelog.repository = 'glowplug-studio/glowplug-skills';
+  await fs.writeFile(lockPath, `${JSON.stringify(legacyLock, null, 2)}\n`);
+  git(f.source, 'remote', 'add', 'origin', 'git@github.com:glowplug-studio/supacharger-license-skills.git');
+  assert.deepEqual(await install(f, { update: true }), []);
+  const lock = JSON.parse(await fs.readFile(lockPath));
+  assert.equal(lock.skills.changelog.repository, 'glowplug-studio/supacharger-license-skills');
+});
 test('updates require an explicit operation and remove obsolete upstream files', async t => {
   const f = await fixture(t); await install(f);
   await fs.rm(path.join(f.source, 'general/changelog/references/example.md'));

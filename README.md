@@ -89,9 +89,9 @@ A Git update resolves the requested ref once and fetches that commit, even if th
 
 The updater installs `src/assets/svgr/ui/image-loader.svg` only when absent and preserves existing artwork, including during legacy updates without a manifest. These CLI changes must be published before they are available through npm.
 
-## Free public agent skills
+## Agent skills
 
-This feature downloads selected skills from the public `glowplug-studio/glowplug-skills` GitHub repository over HTTPS; no purchase or token is required.
+By default this feature downloads selected skills from the public `glowplug-studio/glowplug-skills` GitHub repository over HTTPS; no purchase or token is required. Licensed skills are not shown in that selector. Install them from an authorised committed local checkout with `--source`.
 
 ```bash
 supacharger skills install
@@ -99,14 +99,16 @@ supacharger skills install general/changelog
 supacharger skills update general/changelog
 supacharger skills update
 supacharger skills install general/changelog --ref <commit-or-tag>
+supacharger skills install supacharger/core-upgrade-review --source /path/to/supacharger-license-skills
+supacharger skills update supacharger/core-upgrade-review --source /path/to/supacharger-license-skills
 supacharger init my-project --skip-skills
 ```
 
 Without identifiers, install/update presents grouped checkboxes with descriptions and installation status. An empty selection skips. Named identifiers support agents and non-interactive terminals; non-interactive calls without identifiers fail clearly. Interactive initialisation offers installation after creating the starter; an optional skills failure does not undo initialisation.
 
-Complete skill folders are installed at `.agents/skills/<name>/`, with immutable source commits and SHA-256 file hashes in `.supacharger/skills-lock.json`. Commit these together. Existing untracked destinations and local edits are refused; unchanged installations are idempotent. Skill updates require the explicit update command and do not advance the Core lock. Downloaded skill scripts are not executed. A killed installer may leave `.supacharger/skills-install.lock` and `skills-transaction-*` recovery data; inspect them before retrying.
+Complete skill folders are installed at `.agents/skills/<name>/`, with the actual GitHub source repository, immutable commit and SHA-256 file hashes in `.supacharger/skills-lock.json`. Commit these together. Existing untracked destinations, local edits and attempts to update from a different repository are refused; unchanged installations are idempotent. A legacy local-source record mislabelled as public is repaired only when the authorised checkout contains the same immutable commit and the installed hashes still match. Skill updates require the explicit update command and do not advance the Core lock. Downloaded skill scripts are not executed. A killed installer may leave `.supacharger/skills-install.lock` and `skills-transaction-*` recovery data; inspect them before retrying.
 
-Maintainers can test committed local source with `--source /path/to/glowplug-skills`. Uncommitted source changes are not exported. Publish recorded catalogue commits before expecting remote installs to retrieve them. This command set must be released to npm before older globally installed CLIs can use it.
+Use `--source /path/to/checkout` for a reviewed committed local source, including an authorised licensed checkout. Uncommitted source changes are not exported. The checkout's recognised GitHub `origin` is recorded as provenance; a source without one is recorded as `local/skills-source`, never as the public catalogue. Publish public catalogue commits before expecting remote installs to retrieve them. This command set must be released to npm before older globally installed CLIs can use it.
 
 The canonical installer is Core's `tools/supacharger-skills/installer.cjs`, copied byte-identically into `commands/skills/installer.cjs`. Keep both copies and their tests aligned. Root `AGENTS.md`, `.agents/project/AGENTS.md` and `CHANGELOG.project.md` are installed only when missing during Core updates; existing project instructions are preserved. Shared `.agents/supacharger/guidance.md` and `CHANGELOG.md` follow Core's exact-managed manifest.
 
