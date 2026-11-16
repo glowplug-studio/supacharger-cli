@@ -1,166 +1,38 @@
-# supacharger-cli
+# Supacharger CLI
+
+![Supacharger CLI — developer tools](https://raw.githubusercontent.com/glowplug-studio/supacharger-cli/main/docs/assets/supacharger-cli-banner.webp)
 
 [![npm version](https://badge.fury.io/js/@glowplug%2Fsupacharger-cli.svg)](https://www.npmjs.com/package/@glowplug/supacharger-cli)
 
-Developer CLI for installing and safely updating Supacharger applications.
+**npm package:** [`@glowplug/supacharger-cli`](https://www.npmjs.com/package/@glowplug/supacharger-cli) · **Terminal command:** `supacharger`
 
-`supacharger init [target]` opens with the Supacharger terminal banner and reports seven numbered installation stages in purple. It reads the schema-2 registry, follows its Core descriptor and installs the exact registered source commit. It uses Git when available; otherwise it downloads the registered ZIP and verifies its SHA-256 checksum before extraction. Source is prepared in a sibling transaction directory before the target is touched. The command preserves the target `.git` directory and restores original contents if installation fails. In an interactive terminal it first asks for an optional Supabase resource namespace and writes the validated choice to `PROJECT_NAMESPACE` in developer-owned `src/supacharger.config.ts`; pressing Enter keeps it `null`. It then offers independent checkbox choices for local Supabase through the project-pinned CLI and Supabase Cloud; either or both may be selected. It creates `.env.local` from Core's `.env.local.example`, prompts for grouped Cloud Supabase, Stripe and application values, and generates the server-only application secrets. Pressing Enter on an empty environment prompt leaves the example value unchanged for later completion. When Stripe billing is selected, the wizard explains and collects separate Supabase `sb_secret_` keys named `billing`, `stripe-events` and `stripe-reconciliation`, with their purpose, copyable description and Settings > API Keys link. Secret input is masked; legacy keys and values already assigned to another component are rejected. The optional session-transfer key is collected separately. Names support independent rotation, not reduced database privileges. The CLI never creates provider keys or opens the browser; existing `.env.local` files remain unchanged. Follow Core’s `docs/agents/installation.md#supabase-backend-credentials` to complete deferred credentials. Accepting the application dependency step also runs the installed Core’s `setup:ui` script when available. Local Supabase selection then starts the stack, applies fresh local migrations and writes its connection values and shared local backend secret to `.env.development.local`; Cloud values remain in `.env.local` when both targets are selected. Manual and unattended installations run `npm run setup:ui` during Setup Wizard. It then offers public skill installation unless `--skip-skills` is set and presents the registry extensions with the same checkbox interface. Extension selection is currently a preview only: no extension source is downloaded or installed. The installed application owns `src/i18n/config.ts`, `src/i18n/request.ts`, and the complete `messages/` directory.
+Supacharger CLI is a command-line tool for installing and maintaining Core, the shared foundation of your web app. Create a project, check for changes, update Core, and add agent skills or extensions from your terminal.
 
-`supacharger coreupdate` checks protected core files against the installed baseline, but excludes localisation paths from integrity conflicts. It preserves locale configuration and every secondary catalogue. For `messages/en.json`, it adds missing canonical keys and fills empty English values while retaining every existing non-empty application value, so new managed routes cannot fail because an older project lacks their source copy.
+Use it alongside your coding agent and MCP (Model Context Protocol) tools to set up, deploy and manage Supacharger. Your agent guides the work, the CLI manages project files, and MCP connects the agent to project guidance and service tools. Your agent uses the relevant hosting and service tools for deployment.
 
-`supacharger doctor` is read-only. It downloads the Core revision recorded in `.supacharger/core-lock.json` and the requested incoming revision, then compares their managed files directly with the project. It reports local modifications or missing files separately from incoming additions, updates and removals. It parses the developer-owned `src/supacharger.config.ts` with the TypeScript compiler and compares exact nested configuration paths with the incoming Core template. Dynamic or unresolved configuration causes an explicit incomplete-inspection result. It stores no file hashes, changes no project files and contacts no database.
+Explore [supacharger.dev](https://supacharger.dev) or visit the [main Supacharger project](https://github.com/glowplug-studio/supacharger).
 
-`supacharger which --core` walks upwards from the current directory to the nearest `.supacharger/core-lock.json` and prints its installed Core release version. `supacharger which --extension <name>` prints that extension's currently published registry version; installed extension version tracking will follow the extension registry refactor. The registry-based installer writes the Core release version and exact source commit into its lock. Use `supacharger --version` for the CLI package version.
+## Install from npm
 
-This CLI supports Core `>=0.0.1-alpha <0.0.2`, including `0.0.1` prereleases. Every application command checks the nearest `.supacharger/core-lock.json` before running. Initialisation checks the registry release before preparing files; Core updates and doctor also check the incoming registered release. Missing, invalid or unsupported versions stop the command and display `npm install -g @glowplug/supacharger-cli@latest`. Help and `supacharger --version` remain available without an installation.
-
-Core updates default to the current registered release. An explicit `--ref` accepts a registered version, tag or full commit, including historical releases; unregistered branches and local source commits are rejected. Updates retain both the release version and commit in the lock.
-
-## Optional Core contributor instructions
-
-These private instructions are inert and absent from ordinary application use. They are not installed by `init`, `coreupdate`, `doctor`, `skills`, or a normal non-recursive clone.
-
-Run these commands explicitly from a Git-based Supacharger project only when contributing to Core:
+With Node.js and npm installed, run:
 
 ```bash
-supacharger coredev install
-supacharger coredev update
+npm install -g @glowplug/supacharger-cli@latest
+supacharger --version
 ```
 
-`install` clones `.agents/supacharger/core-development/` from the private contributor repository over SSH and adds the path to the parent repository's local `.git/info/exclude`. It does not create `.gitmodules` or add the checkout to the parent repository. `update` refuses local checkout changes, then fast-forwards the checkout's configured branch.
+The `-g` option makes the command available across your projects. The same install command updates the CLI later. Use `supacharger --help` to see the commands in your installed release.
 
-## Managed core updates
+## Guides
 
-The canonical core publishes version 2 of `.supacharger/managed-files.json`. It separates byte-identical `managedPaths`, contract-aware `mergeManagedPaths`, append-only `forwardOnlyMigrationPaths`, and preserved `developerOwnedPaths`. Reusable authentication/account routes live under `src/app/(supacharger)/`; product routes under `src/app/(project)/`, translations, project CSS, and `src/supacharger.adapters/` remain developer-owned.
+| What you want to do | Read |
+| --- | --- |
+| Create a project and work with an agent and MCP | [Getting started](https://github.com/glowplug-studio/supacharger-cli/blob/main/docs/getting-started.md) |
+| Check and update an existing app | [Updating Core](https://github.com/glowplug-studio/supacharger-cli/blob/main/docs/updating-core.md) |
+| Review configuration changes in an older app | [Upgrade notes](https://github.com/glowplug-studio/supacharger-cli/blob/main/docs/upgrade-notes.md) |
+| Give your agent reusable instructions | [Agent skills](https://github.com/glowplug-studio/supacharger-cli/blob/main/docs/agent-skills.md) |
+| Add optional application features | [Extensions](https://github.com/glowplug-studio/supacharger-cli/blob/main/docs/extensions.md) |
+| Look up a command or option | [Command reference](https://github.com/glowplug-studio/supacharger-cli/blob/main/docs/command-reference.md) |
+| Work on the CLI or Core itself | [Contributor guide](https://github.com/glowplug-studio/supacharger-cli/blob/main/docs/contributing.md) |
 
-`tailwind.config.ts` is exact Core-managed and imports the blank developer-owned `tailwind.project.config.ts` preset. Updates install that preset only when absent; project-specific Tailwind configuration belongs there. When upgrading from the former merge-managed ownership, the CLI stops if the root Tailwind file contains project changes so they can be moved into the preset before replacement.
-
-The update installs developer-owned auth, account, billing, and organisation adapter starters only when each file is missing; established product integrations are preserved on every later update. Managed authentication, account, and organisation JSX uses Base UI/shadcn components, CVA variants and Tailwind utilities. Application branding belongs in the semantic tokens exposed through developer-owned `src/styles/project.css` and `tailwind.project.config.ts`. Organisation adapters include the page, navigation, chrome, and profile extension seams under `src/supacharger.adapters/organisations/`. Pre-release source transitions are handled directly in the application rather than by compatibility migrations in the CLI.
-
-The developer-owned inline loader variants at `src/assets/svgr/ui/inline-loader.svg` and `src/assets/svgr/ui/inline-loader-dark.svg` are also preserved. An update installs either starter only when that exact path is absent, so it cannot overwrite application branding.
-
-Protected Supabase Proxy code is installed at `src/lib/supabase/supacharger/proxy.ts`, protected application access at `src/supacharger/auth/server-access.ts`, and provider SVG components at `src/supacharger/assets/svgr/auth-providers/`. `coreupdate` removes obsolete protected paths declared by the installed baseline while preserving developer-owned loader artwork. During this alignment it also removes the old `AUTH_SESSION.VERIFICATION_MODE` property: `getClaims()` is now the fixed Proxy invariant.
-
-Authenticator-app management is always available in Account Security. During this alignment, `coreupdate` removes obsolete `AUTHENTICATION.MFA_TOTP.ENABLED`, preserves `REQUIRED_FOR_SIGN_IN`, and enables both local `[auth.mfa.totp]` enrolment and verification APIs. Restart the local Supabase stack after updating. Hosted MFA capability remains a separate Dashboard setting.
-
-Core updates distribute `requireVerifiedUser()`, `requireOnboardedUser()`, and `requireAppAccess()`, but recovery pages remain developer-owned and are never moved automatically. After adopting the three-level access contract, manually place profile setup beneath a verified-only layout and billing acquisition beneath an onboarded-only layout, keeping their public URLs unchanged. Leave full product routes beneath `requireAppAccess()`, then run `supacharger doctor` to detect a missing destination or incompatible canonical ancestry.
-
-`supacharger init` installs the complete `src/app/layout.tsx` starter. The manifest then classifies that file as a developer-owned template, so `coreupdate` preserves application fonts, providers, body classes, and extra head content. Shared metadata, SEO, viewport, favicon, and analytics fixes continue through the managed `src/supacharger/root-document.tsx` helper.
-
-```bash
-supacharger coreupdate --plan --ref <tag-or-commit>
-supacharger coreupdate --ref <tag-or-commit>
-
-# Maintainers may plan from a clean local Core checkout:
-supacharger coreupdate --plan --source ../SUPACHARGER_APPS/supacharger
-```
-
-`--plan` clones the installed baseline and latest Core into an operating-system temporary directory, then reports writes, obsolete managed removals, dependency changes and migrations without changing the application or a database.
-
-A real update compares the project directly with the installed Core revision, backs up overwritten files under `.supacharger/backups/<timestamp>/`, and adds that local recovery directory to Git's repository-local exclude file. It blocks a new managed path when it collides with an existing project file, byte-replaces only exact managed paths, and removes obsolete exact files.
-
-The automatic merge contract is deliberately narrow. For `package.json`, it merges `packageManager`, `engines`, dependencies, overrides, and Core install-script approvals while preserving application identity, application-specific approvals, and non-test scripts. It regenerates `package-lock.json` only for a dependency-contract change. For `supabase/config.toml`, it applies only the named TOTP and ImageMagick asset migrations. Any other incoming script, lockfile-only, Supabase configuration, or merge-managed change stops and names the file for an explicit CLI strategy.
-
-The CLI copies only new Core migrations; a differing migration with the same filename halts as a conflict, and installed histories are never replaced or removed. A reviewed adapted equivalent may be mapped in developer-owned `.supacharger/migration-aliases.json`. Linked migrations retain their separate preview and confirmation. Finally, the CLI directly compares every installed managed file with the downloaded target and advances `.supacharger/core-lock.json` only when they match. It stores no file hashes and runs no application test suite. If an update fails, the lock remains at the installed revision: inspect the Git diff and `.supacharger/backups/`, restore application files from Git or the recovery copies, and retry. Database migrations are forward-only and are not undone by file restoration.
-
-`postcss.config.mjs` is exact managed. During an upgrade from the legacy filename, an unchanged `postcss.config.js` is backed up and removed; a customised legacy file is preserved and the update stops for human review.
-
-Application values in `src/supacharger.config.ts` are also preserved. The updater distributes the protected `src/supacharger/supacharger-config-contract.ts`, so every application is checked against the same option names and shapes while retaining its own values. The approved account-alignment migration inserts only absent profile-media, `ACCOUNT_SETTINGS`, `ORGANISATIONS`, and `BILLING.ACCOUNT_SUBJECTS` keys with disabled-safe defaults; it never replaces an existing value.
-
-The current contract renames the historical `PATH_AUTH_GARD` option to `PATH_AUTH_GUARD`. Rename the key in an existing application's `src/supacharger.config.ts` before adopting this core version.
-
-The social-auth provider migration expands `AUTH_PROVDERS_ENABLED` from Google/Facebook to the complete canonical Supabase provider map. `coreupdate --plan` lists every missing nested key. A real update backs up `src/supacharger.config.ts`, preserves existing provider values, and adds every newly supported provider as `false`; developers opt in only after configuring that provider and `/auth/callback` in Supabase.
-
-The root-document migration similarly reports missing `METADATA`, `ROOT_PROVIDERS`, and `ANALYTICS` blocks. A real update backs up the developer configuration and inserts only missing blocks. It derives the title template from the existing application title, enables favicon declarations only when `public/favicon.ico` and the standard `public/favicons/` files exist, and leaves Google Analytics disabled until `NEXT_PUBLIC_GOOGLE_ANALYTICS_ID` is configured.
-
-Read the documentation at http://supacharger.dev/docs/cli/
-
-Core upgrades install the no-op `src/supacharger.adapters/request-guard.ts` only when absent, preserving project availability checks on later updates.
-
-## Signup terms notice
-
-Set `AUTHENTICATION.SIGN_UP_TERMS_URL` in developer-owned `src/supacharger.config.ts` to an absolute HTTP(S) URL. The default `null` hides the notice; invalid, relative and credential-bearing URLs are not rendered. The link opens a new tab with `noopener noreferrer`.
-
-The shared login/signup form displays the notice beneath signup actions and on the provider chooser, where a social action can create an account even from sign-in. Wording follows the configured password, passwordless and social signup methods. `AuthJourney.signUpTerms`, `signUpTermsSocial`, `signUpTermsSocialOnly`, `signUpTermsPasswordless` and `signUpTermsPasswordlessSocial` are complete rich-text messages; preserve the `<terms>...</terms>` link tag when translating. English values are supplied; secondary catalogues remain pending translation.
-
-This is a displayed notice, not a required checkbox or stored consent record. `ACCOUNT_REQUIRED_TERMS_AGREEMENT_PATH` remains separate. CLI upgrades add the missing setting as `null` and preserve an existing URL. Existing consumers receive the same property without changing their authentication methods. Configure the application's real terms URL before expecting a visible notice.
-
-## Git update identity and image loader
-
-A Git update resolves the requested ref once and fetches that commit, even if the branch moves while conflicts are reviewed. Both update paths record the checked-out commit only after direct managed-file comparison succeeds. Use an explicit commit SHA for a separately reviewed plan and update to target the same release.
-
-The updater installs `src/assets/svgr/ui/image-loader.svg` only when absent and preserves existing artwork, including during legacy updates without a manifest. These CLI changes must be published before they are available through npm.
-
-## Agent skills
-
-By default this feature downloads selected skills from the public `glowplug-studio/glowplug-skills` GitHub repository over HTTPS; no purchase or token is required. Licensed skills are not shown in that selector. Install them from an authorised committed local checkout with `--source`.
-
-```bash
-supacharger skills install
-supacharger skills install general/changelog
-supacharger skills update general/changelog
-supacharger skills update
-supacharger skills install general/changelog --ref <commit-or-tag>
-supacharger skills install supacharger/core-upgrade-review --source /path/to/supacharger-license-skills
-supacharger skills update supacharger/core-upgrade-review --source /path/to/supacharger-license-skills
-supacharger init my-project --skip-skills
-```
-
-Without identifiers, install/update presents grouped checkboxes with descriptions and installation status. An empty selection skips. Named identifiers support agents and non-interactive terminals; non-interactive calls without identifiers fail clearly. Interactive initialisation offers installation after creating the starter; an optional skills failure does not undo initialisation.
-
-Complete skill folders are installed at `.agents/skills/<name>/`, with the actual GitHub source repository, immutable commit and one SHA-256 digest for the complete skill directory in `.supacharger/skills-lock.json`. Commit these together. Existing untracked destinations, local edits and attempts to update from a different repository are refused; unchanged installations are idempotent. Skill updates require the explicit update command and do not advance the Core lock. Downloaded skill scripts are not executed. A killed installer may leave `.supacharger/skills-install.lock` and `skills-transaction-*` recovery data; inspect them before retrying.
-
-Use `--source /path/to/checkout` for a reviewed committed local source, including an authorised licensed checkout. Uncommitted source changes are not exported. The checkout's recognised GitHub `origin` is recorded as provenance; a source without one is recorded as `local/skills-source`, never as the public catalogue. Publish public catalogue commits before expecting remote installs to retrieve them. This command set must be released to npm before older globally installed CLIs can use it.
-
-The canonical installer is Core's `tools/supacharger-skills/installer.cjs`, copied byte-identically into `commands/skills/installer.cjs`. Keep both copies aligned. Root `AGENTS.md`, `.agents/project/AGENTS.md` and `CHANGELOG.project.md` are installed only when missing during Core updates; existing project instructions are preserved. Shared `.agents/supacharger/guidance.md` and `CHANGELOG.md` follow Core's exact-managed manifest.
-
-See [Agent guidance](https://supacharger.dev/docs/agents), [Skills](https://supacharger.dev/docs/skills) and [Contributing](https://supacharger.dev/docs/contributing).
-
-The public skill checkbox dependency requires Node.js 22.13 or later in the 22.x line, or Node.js 24 or later.
-
-## Agent guidance and application verification
-
-Read `AGENTS.md`, then `.agents/project/AGENTS.md`. Initialisation removes test suites, fixtures and test scripts from the cloned starter while preserving installed skills. Core updates remove obsolete test package scripts, install missing `docs/agents/*.md` references and preserve existing references for deliberate review. Application files outside obsolete managed paths are not swept by an update. Maintainer tests remain in this CLI repository and outside the published npm package.
-
-The upstream Core `.gitignore` excludes its local skill installations. Initialisation removes that marked Core-only block so applications may commit selected skills and their installation records. Skill records remain independent of the Core revision and are managed by the skills installer.
-
-### Email branding
-
-Initial setup copies the tracked `public/images/email-template/email-logo.png` from Core. This directory is developer-owned: replace the logo and commit it. `coreupdate` preserves it and does not install missing email branding files.
-
-## Reviewed local extension bundles
-
-`supacharger extension available` reads the schema-2 registry, numbers every registered extension, marks an extension installed when its entry, configuration, installation guide and agent guide are present and offers interactive selection. `supacharger extension list` remains an alias. `supacharger extension install <id> --source <directory> [--plan]` and `supacharger extension doctor <id> --source <directory>` retain the reviewed local-source workflow; they do not yet download private extension releases or implement entitlement checks. Check installed CLI help before using these commands with an older npm release.
-
-Schema 3 maps `payload/app/` into `src/app/(project)/(extensions)/(sc_extensions)/(<id>)/`, `payload/supabase/shared/` into `supabase/functions/_shared/extensions/sc_ext-<id>/`, namespaced function payloads into `supabase/functions/`, and forward SQL into the flat `supabase/migrations/` directory. `payload/docs/` maps to `docs/extensions/<id>/` and must include INSTALL.md. Source and target paths must match the canonical mapping.
-
-The manifest uses `name: supacharger-ext-<id>` and marks the app-root config file `supacharger-ext-<id>.config.ts` with `kind: config`; this file is installed only when missing and preserved on update. Updates compare installed files directly with the incoming payload; migration bytes remain immutable. No installation receipt is stored. Core's `tools/supacharger-extensions/installer.cjs` is canonical and must remain byte-identical to `commands/extensions/installer.cjs`.
-
-Installation does not apply migrations, seed databases, deploy functions, set secrets, load translations or implement enablement. The CLI requires the extension to appear in the schema-2 registry. When its descriptor publishes a version and immutable source commit, the supplied local Git checkout must match that release exactly. An entry without published release metadata remains available for local review but is reported as registered and unverified. Never infer operational readiness from file integrity alone.
-
-Core updates configure the managed `profile-media` Edge Function for public requests. The function still authorises every image through caller-scoped Storage RLS. Set the environment-specific database media origin and coordinate breaking profile RPC upgrades with application releases; see Core’s profile extension guidance.
-
-## Local release comparison
-
-Extensions can be downloaded from their registered GitHub ZIP releases, or supplied with `--source` for local review:
-
-```sh
-supacharger extension available
-supacharger extension install supacharger-ext-brevo --source /path/to/release --plan
-supacharger extension update supacharger-ext-brevo --source /path/to/new-release --plan
-```
-
-Remove `--plan` to apply the listed changes. The CLI compares each installed destination directly with its incoming payload file. Equal files are skipped; differing extension-owned files are replaced. Developer configuration is preserved, existing migrations must match exactly, and unlisted project files are left alone. This comparison does not infer whether a difference is a local customisation or an upstream change; inspect the plan and Git diff before applying an update.
-
-
-The CLI uses the public schema-2 registry manifest by default. `--registry <URL-or-path>` can select another schema-2 manifest for development. Each manifest points to separate Core and extension descriptors. For `--source`, published extension verification requires a clean local Git checkout at the descriptor's exact source commit. Downloads instead verify the registry's ZIP checksum. Until an extension descriptor publishes its version and commit, local installation reports `registryRegistered: true` and `registryVerified: false`.
-
-Dependency checks inspect the standard installed entry and configuration files. Missing source and disabled configuration stop installation. Required Core services resolve through the application configuration. Installation does not contact services, apply SQL, deploy workers or send email.
-
-Registry release downloads are supported without `--source`. The descriptor must supply a GitHub ZIP URL and SHA-256 checksum alongside its version and source commit. The ZIP must have one root directory containing an installable `extension.json` and payload. Prepared bundles must match the host namespace. The init picker offers transactional email only; unavailable releases and unmet dependencies are reported, not simulated. The configuration/Supabase demonstration wizard remains commented out pending implementation.
-
-Use `supacharger doctor --extension <name> [--source <path>] [--registry <location>] [--root <path>]` for extension comparison. Without `--source`, it downloads the registered release. The older `extension doctor` spelling remains supported. Differences are listed without writing files and return exit status 1; matching files return 0. Configuration and deployment are not checked by this comparison.
-
-Interactive init offers application-package installation after environment setup and before skills/extensions: `npm ci` with a lockfile, otherwise `npm install`. Skipping leaves package installation for later. It then offers an optional, default-off Vercel AI SDK step that installs exact versions of `ai` and `@ai-sdk/react`; provider packages and credentials remain project choices.
-
-Interactive init also offers optional Stripe agent tooling. The CLI checks for an existing Stripe CLI installation and, when available, runs Stripe's official `stripe agent setup` flow. It does not install the system CLI or open an OAuth page. If Stripe CLI is missing, install the latest release with `npm install -g @stripe/cli@latest`, then run `stripe agent setup`; see [Stripe MCP](https://docs.stripe.com/mcp).
+The guides follow this repository's source. Some features may be ahead of the published npm package; see the [changelog](https://github.com/glowplug-studio/supacharger-cli/blob/main/CHANGELOG.md).
