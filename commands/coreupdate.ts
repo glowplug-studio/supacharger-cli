@@ -66,6 +66,7 @@ const UI_THEME_FILE = path.join('src', 'styles', 'ui-theme.ts');
 const PROJECT_TAILWIND_CONFIG_FILE = 'tailwind.project.config.ts';
 const AUTH_SIDECAR_FILE = path.join('src', 'supacharger.adapters', 'auth', 'auth-sidecar.tsx');
 const ACCOUNT_ADAPTER_FILES = [
+  'deletion.ts',
   'details-page.tsx',
   'navigation.ts',
   'notifications.ts',
