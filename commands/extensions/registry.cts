@@ -1,0 +1,298 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { safePath, validateManifest } from './installer.cjs';
+import { extractSourceZip } from '../common/source-archive.cjs';
+
+
+import type { ProviderDependencyRule, ExtensionManifest } from './installer.cjs';
+export type { ProviderDependencyRule, ExtensionFile, ExtensionManifest } from './installer.cjs';
+export interface RegistryEntry { name: string; path: string }
+export interface RegistryManifest { schemaVersion: number; core: RegistryEntry; extensions: RegistryEntry[] }
+export interface RegistryDescriptor {
+ schemaVersion: number; name: string; github_repo_url: string; dependencies: string[];
+ provider_dependencies?: Record<string, ProviderDependencyRule>; version: string; source_commit: string;
+ archive_checksum?: { algorithm: string; format: string; value: string }; download_url?: string; version_history?: Record<string, { source_commit: string; archive_checksum?: { algorithm: string; format: string; value: string }; download_url?: string }>;
+}
+export type CoreRegistryDescriptor = RegistryDescriptor & Required<Pick<RegistryDescriptor, 'download_url' | 'archive_checksum'>>;
+export interface RegistryOptions { fetch?: typeof globalThis.fetch; attempts?: number; timeout?: number; maxBytes?: number }
+export type InventoryRecord = [string, string, Buffer];
+export interface ReleaseVerification { verified: boolean; registered: boolean; reason?: string; entry: RegistryDescriptor; entries: Map<string, RegistryDescriptor>; inventory?: InventoryRecord[] }
+type RegistryError = Error & { code?: string; cause?: { code?: string; message?: string } };
+
+const REGISTRY_MANIFEST_URL = 'https://raw.githubusercontent.com/glowplug-studio/supacharger-cli-extension-register/refs/heads/main/manifest.json';
+const namePattern = /^supacharger-ext-[a-z][a-z0-9-]{0,63}$/;
+const versionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+const commitPattern = /^[a-f0-9]{40}$/;
+const registryPathPattern = /^(?:core|extensions)\/[a-z0-9][a-z0-9./-]*\.json$/;
+
+function validRegistryPath(registryPath: unknown): registryPath is string {
+  return typeof registryPath === 'string' &&
+    registryPathPattern.test(registryPath) &&
+    registryPath.split('/').every(part => part && part !== '.' && part !== '..');
+}
+
+function parseRegistryManifest(bytes: string | Buffer): RegistryManifest {
+  const data = JSON.parse(bytes.toString()) as RegistryManifest;
+  if (
+    data.schemaVersion !== 2 ||
+    !data.core ||
+    data.core.name !== 'supacharger' ||
+    !validRegistryPath(data.core.path) ||
+    !Array.isArray(data.extensions)
+  ) throw new Error('Unsupported registry schema');
+
+  const names = new Set();
+  const paths = new Set([data.core.path]);
+  for (const item of data.extensions) {
+    if (
+      !item ||
+      !namePattern.test(item.name) ||
+      names.has(item.name) ||
+      !validRegistryPath(item.path) ||
+      paths.has(item.path)
+    ) throw new Error('Invalid registry extension entry');
+    names.add(item.name);
+    paths.add(item.path);
+  }
+  return data;
+}
+
+function validateDescriptorIdentity(descriptor: RegistryDescriptor, expectedName: string) {
+  if (
+    !descriptor ||
+    descriptor.schemaVersion !== 2 ||
+    descriptor.name !== expectedName ||
+    typeof descriptor.github_repo_url !== 'string' ||
+    !/^(?:https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?|git@github\.com:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git)$/.test(descriptor.github_repo_url) ||
+    !Array.isArray(descriptor.dependencies) ||
+    new Set(descriptor.dependencies).size !== descriptor.dependencies.length
+  ) throw new Error(`Invalid registry descriptor: ${expectedName}`);
+
+  if (expectedName !== 'supacharger' && descriptor.dependencies.some(name => !namePattern.test(name) || name === expectedName)) {
+    throw new Error(`Invalid registry dependencies: ${expectedName}`);
+  }
+  if (descriptor.provider_dependencies !== undefined) {
+    if (!descriptor.provider_dependencies || Array.isArray(descriptor.provider_dependencies) || typeof descriptor.provider_dependencies !== 'object') {
+      throw new Error(`Invalid registry provider dependencies: ${expectedName}`);
+    }
+    for (const [slot, rule] of Object.entries(descriptor.provider_dependencies)) {
+      if (!/^[a-z][a-zA-Z0-9_]*$/.test(slot) || !rule || typeof rule !== 'object' ||
+          !/^[a-z][a-zA-Z0-9_]*$/.test(rule.config_key) || !rule.providers || Array.isArray(rule.providers) ||
+          typeof rule.providers !== 'object' || !Object.hasOwn(rule.providers, rule.default)) {
+        throw new Error(`Invalid registry provider dependency rule: ${expectedName}`);
+      }
+      for (const [provider, names] of Object.entries(rule.providers)) {
+        if (!/^[a-z][a-z0-9_-]*$/.test(provider) || !Array.isArray(names) || !names.length ||
+            new Set(names).size !== names.length || names.some(name => !namePattern.test(name) || name === expectedName)) {
+          throw new Error(`Invalid registry provider dependency mapping: ${expectedName}`);
+        }
+      }
+    }
+  }
+  return descriptor;
+}
+
+function validateCoreDescriptor(descriptor: RegistryDescriptor): CoreRegistryDescriptor {
+  validateDescriptorIdentity(descriptor, 'supacharger');
+  if (
+    typeof descriptor.version !== 'string' || !descriptor.version ||
+    !commitPattern.test(descriptor.source_commit) ||
+    descriptor.archive_checksum?.algorithm !== 'sha256' ||
+    descriptor.archive_checksum?.format !== 'zip' ||
+    !/^[a-f0-9]{64}$/.test(descriptor.archive_checksum?.value as string) ||
+    typeof descriptor.download_url !== 'string' ||
+    !/^https:\/\/github\.com\//.test(descriptor.download_url)
+  ) throw new Error('Core registry descriptor is incomplete');
+  return descriptor as CoreRegistryDescriptor;
+}
+
+async function readLocation(location: string, options: RegistryOptions = {}) {
+  if (/^https:\/\//.test(location)) {
+    const fetchImplementation = options.fetch ?? globalThis.fetch;
+    if (typeof fetchImplementation !== 'function') throw new Error('This Node.js version cannot fetch the Supacharger registry');
+    const attempts = options.attempts ?? 3;
+    let response: Awaited<ReturnType<typeof globalThis.fetch>> | undefined;
+    let lastError: RegistryError | undefined;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        response = await fetchImplementation(location, { signal: AbortSignal.timeout(options.timeout ?? 30_000) });
+        if (response.ok) break;
+        if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt === attempts) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        lastError = new Error(`HTTP ${response.status}`) as RegistryError;
+      } catch (error) {
+        lastError = error as RegistryError;
+        if (attempt === attempts || /^HTTP 4\d\d$/.test((error as Error).message)) break;
+      }
+      await new Promise(resolve => setTimeout(resolve, attempt * 250));
+    }
+    if (!response?.ok) {
+      const cause = lastError?.cause;
+      const detail = [lastError?.message, cause?.code, cause?.message]
+        .filter(Boolean)
+        .filter((value, index, values) => values.indexOf(value) === index)
+        .join(': ');
+      throw new Error(`Registry request failed for ${location}${detail ? `: ${detail}` : ''}`);
+    }
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length > (options.maxBytes ?? 1024 * 1024)) throw new Error(`Registry response is too large: ${location}`);
+    return bytes;
+  }
+  return fs.readFile(path.resolve(location));
+}
+
+function resolveRegistryLocation(manifestLocation: string, relativePath: string) {
+  if (/^https:\/\//.test(manifestLocation)) return new URL(relativePath, manifestLocation).toString();
+  return path.resolve(path.dirname(path.resolve(manifestLocation)), relativePath);
+}
+
+async function loadRegistryManifest(location = REGISTRY_MANIFEST_URL, options: RegistryOptions = {}) {
+  return parseRegistryManifest(await readLocation(location, options));
+}
+
+async function loadRegistryDescriptor(entry: RegistryEntry, manifestLocation = REGISTRY_MANIFEST_URL, options: RegistryOptions = {}) {
+  const location = resolveRegistryLocation(manifestLocation, entry.path);
+  const descriptor = JSON.parse((await readLocation(location, options)).toString()) as RegistryDescriptor;
+  return validateDescriptorIdentity(descriptor, entry.name);
+}
+
+async function loadCoreDescriptor(location = REGISTRY_MANIFEST_URL, options: RegistryOptions = {}) {
+  const manifest = await loadRegistryManifest(location, options);
+  return validateCoreDescriptor(await loadRegistryDescriptor(manifest.core, location, options));
+}
+
+async function loadExtensionRegistry(location = REGISTRY_MANIFEST_URL, options: RegistryOptions = {}) {
+  const manifest = await loadRegistryManifest(location, options);
+  const descriptors = await Promise.all(
+    manifest.extensions.map(entry => loadRegistryDescriptor(entry, location, options)),
+  );
+  const entries = new Map(descriptors.map(descriptor => [descriptor.name, descriptor]));
+  const visit = (name: string, chain: string[] = []): void => {
+    if (chain.includes(name)) throw new Error('Cyclic extension dependency');
+    const entry = entries.get(name);
+    if (!entry) throw new Error(`Unknown registry dependency: ${name}`);
+    const dependencies = [
+      ...entry.dependencies,
+      ...Object.values(entry.provider_dependencies || {}).flatMap(rule => Object.values(rule.providers).flat()),
+    ];
+    dependencies.forEach(dependency => visit(dependency, [...chain, name]));
+  };
+  entries.forEach((entry, name) => visit(name));
+  return { manifest, entries };
+}
+
+async function listExtensions(location = REGISTRY_MANIFEST_URL, options: RegistryOptions = {}) {
+  const { entries } = await loadExtensionRegistry(location, options);
+  return [...entries.keys()];
+}
+
+function sourceInventory(source: string, commit: string) {
+  if (!commitPattern.test(commit)) throw new Error('Exact source commit required');
+  const git = (args: string[]) => execFileSync('git', ['-C', source, ...args], { maxBuffer: 128 * 1024 * 1024 });
+  const head = git(['rev-parse', 'HEAD']).toString('utf8').trim();
+  if (head !== commit) throw new Error('Extension source is not checked out at the registered commit');
+  if (git(['status', '--porcelain']).length > 0) throw new Error('Extension source has uncommitted or untracked files');
+
+  const tree = git(['ls-tree', '-rz', '--full-tree', commit]);
+  const records: InventoryRecord[] = []; const seen = new Set();
+  for (const row of tree.toString('utf8').split('\0').filter(Boolean)) {
+    const tab = row.indexOf('\t'); const [mode, type, oid] = row.slice(0, tab).split(' '); const file = row.slice(tab + 1);
+    if (!['100644', '100755'].includes(mode) || type !== 'blob' || file.includes('\ufffd') ||
+        file.includes('\\') || file.startsWith('/') || file.split('/').some(part => !part || part === '.' || part === '..') || seen.has(file.toLowerCase())) {
+      throw new Error('Unsupported source tree entry');
+    }
+    seen.add(file.toLowerCase());
+    const bytes = git(['cat-file', 'blob', oid]);
+    if (bytes.toString('utf8', 0, 100).startsWith('version https://git-lfs.github.com/spec/v1')) throw new Error('LFS source unsupported');
+    records.push([file, mode, bytes]);
+  }
+  records.sort((first, second) => Buffer.compare(Buffer.from(first[0]), Buffer.from(second[0])));
+  return { records };
+}
+
+function publishedExtensionDescriptor(descriptor: RegistryDescriptor) {
+  return versionPattern.test(descriptor.version) && commitPattern.test(descriptor.source_commit);
+}
+
+function verifyBundleMetadata(entry: RegistryDescriptor, bundle: ExtensionManifest) {
+  if (entry.version !== bundle.version) throw new Error('Registry version does not match bundle');
+  if (JSON.stringify(entry.dependencies) !== JSON.stringify(bundle.dependencies || [])) throw new Error('Registry dependencies do not match bundle');
+  if (entry.provider_dependencies !== undefined && JSON.stringify(entry.provider_dependencies) !== JSON.stringify(bundle.provider_dependencies || {})) {
+    throw new Error('Registry provider dependencies do not match bundle');
+  }
+}
+
+/** Only checksum-verified archive bytes enter this path; no verification bypass flag. */
+async function withDownloadedRelease<T>(name: string, registryLocation: string | undefined, callback: (source: string, manifest: ExtensionManifest, release: ReleaseVerification) => Promise<T>): Promise<T> {
+  const { entries } = await loadExtensionRegistry(registryLocation);
+  const entry = entries.get(name);
+  if (!entry) throw new Error(`Extension is not registered: ${name}`);
+  if (!publishedExtensionDescriptor(entry) || entry.archive_checksum?.algorithm !== 'sha256' ||
+      entry.archive_checksum?.format !== 'zip' || !/^[a-f0-9]{64}$/.test(entry.archive_checksum?.value as string) ||
+      typeof entry.download_url !== 'string' || !/^https:\/\/github\.com\//.test(entry.download_url)) {
+    throw new Error(`${name} has no complete published release. Its registry entry needs a version, source commit, GitHub ZIP URL and SHA-256 checksum.`);
+  }
+  const bytes = await readLocation(entry.download_url, { maxBytes: 128 * 1024 * 1024, timeout: 60_000 });
+  if (createHash('sha256').update(bytes).digest('hex') !== entry.archive_checksum.value) {
+    throw new Error('Extension ZIP checksum does not match the registry');
+  }
+  const temporary = await fs.mkdtemp(path.join(tmpdir(), 'supacharger-extension-'));
+  try {
+    const source = path.join(temporary, 'source');
+    await extractSourceZip(bytes, source);
+    const manifest = JSON.parse(await fs.readFile(await safePath(source, 'extension.json'), 'utf8')) as ExtensionManifest;
+    validateManifest(manifest, name.slice(16));
+    verifyBundleMetadata(entry, manifest);
+    return await callback(source, manifest, { verified: true, registered: true, entry, entries });
+  } finally {
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
+}
+
+async function verifyRelease(source: string, bundle: ExtensionManifest, registryLocation = REGISTRY_MANIFEST_URL, options: RegistryOptions = {}) {
+  const { entries } = await loadExtensionRegistry(registryLocation, options);
+  const entry = entries.get(bundle.name);
+  if (!entry) throw new Error(`Extension is not registered: ${bundle.name}`);
+  if (!publishedExtensionDescriptor(entry)) {
+    return { verified: false, registered: true, reason: 'The registered extension has no published release yet', entry, entries };
+  }
+  verifyBundleMetadata(entry, bundle);
+
+  let inventory: InventoryRecord[];
+  try {
+    inventory = sourceInventory(source, entry.source_commit).records;
+  } catch (error) {
+    throw new Error(`Registered extension verification requires a clean Git checkout: ${(error as Error).message}`);
+  }
+  for (const [file, mode, bytes] of inventory) {
+    const stat = await fs.stat(await safePath(source, file));
+    if ((mode === '100755') !== Boolean(stat.mode & 0o111)) throw new Error(`Source mode differs from registered commit: ${file}`);
+    if (!(await fs.readFile(await safePath(source, file))).equals(bytes)) throw new Error(`Source differs from registered commit: ${file}`);
+  }
+  const tracked = new Set(inventory.map(row => row[0]));
+  if (!tracked.has('extension.json') || bundle.files.some(file => !tracked.has(file.source))) {
+    throw new Error('Payload is not in the registered source');
+  }
+  return { verified: true, registered: true, entry, entries, inventory };
+}
+
+export {
+  REGISTRY_MANIFEST_URL,
+  listExtensions,
+  loadCoreDescriptor,
+  loadExtensionRegistry,
+  loadRegistryDescriptor,
+  loadRegistryManifest,
+  parseRegistryManifest,
+  readLocation,
+  resolveRegistryLocation,
+  sourceInventory,
+  validateCoreDescriptor,
+  verifyRelease,
+  withDownloadedRelease,
+  versionPattern,
+};

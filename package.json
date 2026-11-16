@@ -19,11 +19,14 @@
     "yaml": "2.9.1"
   },
   "bin": {
-    "supacharger": "bin/cli.js"
+    "supacharger": "dist/bin/cli.js"
   },
   "scripts": {
-    "check": "node --check bin/cli.js && node --check commands/ai-sdk.js && node --check commands/coredev.js && node --check commands/coreupdate.js && node --check commands/doctor.js && node --check commands/environment.js && node --check commands/initialise.js && node --check commands/setup-preview.js && node --check commands/stripe-agent-tools.js && node --check commands/version.js && node --test",
-    "test": "node --test"
+    "typecheck": "tsc --noEmit",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/bin/cli.js', 0o755)\"",
+    "test": "node -e \"require('node:fs').rmSync('.test-dist', { recursive: true, force: true })\" && tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js",
+    "check": "npm run typecheck && npm test && npm run build",
+    "prepack": "npm run build"
   },
   "keywords": [
     "cli",
@@ -32,15 +35,19 @@
     "updates"
   ],
   "files": [
-    "bin",
-    "commands",
-    "messages",
+    "dist/bin",
+    "dist/commands",
+    "dist/messages",
+    "dist/package.json",
     "CHANGELOG.md"
   ],
   "author": "sharpi_sh @ Glowplug.studio",
   "license": "MIT",
-  "main": "bin/cli.js",
+  "main": "dist/bin/cli.js",
   "devDependencies": {
+    "@types/adm-zip": "0.5.8",
+    "@types/node": "22.20.5",
+    "@types/semver": "7.8.0",
     "eslint": "9.39.4",
     "eslint-plugin-simple-import-sort": "14.0.0"
   },

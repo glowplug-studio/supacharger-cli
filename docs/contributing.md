@@ -13,7 +13,11 @@ npm ci
 npm run check
 ```
 
-The check command validates JavaScript syntax and runs the CLI tests. Use `node bin/cli.js --help` to inspect the local command surface without changing a project. Run installation or update experiments only against an appropriate disposable test application.
+The check command checks TypeScript types, runs the CLI tests and builds the executable. Use `node dist/bin/cli.js --help` after building to inspect the local commands without changing a project. Run installation or update experiments only against an appropriate disposable test application.
+
+Edit the TypeScript files in `bin/`, `commands/` and `test/`. Files ending in `.cts` explicitly produce CommonJS modules (`.cjs`). `npm run build` creates the JavaScript in `dist/`; do not edit or commit that generated directory. `npm run typecheck` checks types without building, and `npm test` compiles the tests into the ignored `.test-dist/` directory before running them.
+
+`npm pack` and `npm publish` build the executable automatically through `prepack`. The published package contains compiled JavaScript and its required JSON files, excluding test code and TypeScript development files. Users install and run it with the same npm and `supacharger` commands; they do not need a separate compilation step. TypeScript remains a runtime dependency because the CLI uses its parser to read application configuration safely.
 
 The `files` list in `package.json` controls the published package. The README uses GitHub-hosted image and guide links so npm readers can reach the documentation without adding those assets to the executable package.
 
@@ -46,8 +50,10 @@ Core owns these reusable installer implementations. Keep the CLI copies byte-ide
 
 | Core source | CLI copy |
 | --- | --- |
-| `tools/supacharger-skills/installer.cjs` | `commands/skills/installer.cjs` |
-| `tools/supacharger-extensions/installer.cjs` | `commands/extensions/installer.cjs` |
+| `tools/supacharger-skills/installer.cts` | `commands/skills/installer.cts` |
+| `tools/supacharger-extensions/installer.cts` | `commands/extensions/installer.cts` |
+
+Edit the TypeScript source in Core first, then copy it to the CLI. Core's [shared installer build](https://github.com/glowplug-studio/supacharger/blob/main/tools/supacharger-skills/README.md#building-the-shared-installers) regenerates its checked-in CommonJS files for existing tooling. The CLI's `npm run build` generates the same files under `dist/commands/skills/` and `dist/commands/extensions/`. Compare both source pairs and generated file pairs before releasing; use the same pinned TypeScript compiler and emit settings in both repositories.
 
 Preserve source provenance, local-edit protection and the separation between Core, application-owned files and migration history. Do not make a CLI-only change to a shared installer without aligning its canonical source.
 

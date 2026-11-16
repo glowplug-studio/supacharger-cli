@@ -21,6 +21,8 @@
 
 ### Changed
 
+- CLI commands and regression tests use strict TypeScript. Publishing builds the JavaScript executable automatically, while tests and development files stay outside the npm package.
+
 - Existing `.env.local` files preserve their secrets without skipping namespace rendering.
 
 - Initialisation now reports seven numbered stages in purple, explains destructive replacement in plain language, accepts explicit `Y` or `n`, and removes the development-only GitHub warning.
