@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { execFile } = require('node:child_process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const ts = require('typescript');
@@ -92,11 +93,44 @@ function replaceEnvironmentValue(source, name, value) {
   return `${source.replace(/\s*$/, '')}\n${line}\n`;
 }
 
-async function promptEnvironmentValues(prompts, imageSecretName = 'SC_IMAGE_UPLOAD_SIGNING_SECRET') {
+function supabaseKeysUrl(projectUrl) {
+  try {
+    const url = new URL(projectUrl.trim());
+    const match = url.hostname.match(/^([a-z0-9]+)\.supabase\.co$/);
+    if (url.protocol === 'https:' && match) return `https://supabase.com/dashboard/project/${match[1]}/settings/api-keys`;
+  } catch { /* An omitted or local URL uses the project picker. */ }
+  return 'https://supabase.com/dashboard/project/_/settings/api-keys';
+}
+
+async function promptSupabaseSecret(prompts, values, variable, name, description) {
+  values[variable] = (await prompts.password({
+    message: copy.SupabaseSecretPrompt.replace('{name}', name).replace('{description}', description).replace('{variable}', variable),
+    mask: '*',
+    validate: answer => {
+      const value = answer.trim();
+      if (!value) return true;
+      if (!/^sb_secret_[A-Za-z0-9_-]+$/.test(value)) return copy.SupabaseSecretInvalid;
+      if (Object.entries(values).some(([key, existing]) => key.startsWith('SUPABASE_') && existing.trim() === value)) return copy.SupabaseSecretDuplicate;
+      return true;
+    },
+  })).trim();
+}
+
+async function selectSupabaseTargets(prompts) {
+  return prompts.checkbox({
+    message: `${copy.SupabaseTargetsPrompt}\n`,
+    choices: [
+      { name: copy.SupabaseTargetLocal, value: 'local' },
+      { name: copy.SupabaseTargetCloud, value: 'cloud' },
+    ],
+  });
+}
+
+async function promptEnvironmentValues(prompts, imageSecretName = 'SC_IMAGE_UPLOAD_SIGNING_SECRET', supabaseTargets = ['cloud']) {
   const values = {};
 
   console.log(`\n${colour(copy.SupabaseHeading, 'lime')}`);
-  if (await prompts.confirm({ message: colour(copy.SupabaseConfirm, 'lime'), default: true })) {
+  if (supabaseTargets.includes('cloud')) {
     values.NEXT_PUBLIC_SUPABASE_URL = await prompts.input({
       message: copy.SupabaseUrl,
     });
@@ -104,11 +138,12 @@ async function promptEnvironmentValues(prompts, imageSecretName = 'SC_IMAGE_UPLO
       message: copy.SupabasePublishableKey,
       mask: '*',
     });
-    values.SUPABASE_SERVICE_ROLE_KEY = await prompts.password({
-      message: copy.SupabaseServiceRoleKey,
-      mask: '*',
-    });
+    if (await prompts.confirm({ message: copy.SupabaseSessionTransfersConfirm, default: false })) {
+      console.log(copy.SupabaseSecretInstructions.replace('{url}', supabaseKeysUrl(values.NEXT_PUBLIC_SUPABASE_URL)));
+      await promptSupabaseSecret(prompts, values, 'SUPABASE_SESSION_TRANSFERS_SECRET_KEY', 'session-transfers', copy.SupabaseSessionTransfersDescription);
+    }
   }
+  if (supabaseTargets.includes('local')) console.log(copy.SupabaseLocalSelected);
 
   console.log(`\n${colour(copy.StripeHeading, 'purple')}`);
   if (await prompts.confirm({ message: colour(copy.StripeConfirm, 'purple'), default: true })) {
@@ -116,6 +151,19 @@ async function promptEnvironmentValues(prompts, imageSecretName = 'SC_IMAGE_UPLO
       message: copy.StripeSecretKey,
       mask: '*',
     });
+    values.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = await prompts.password({
+      message: copy.StripePublishableKey,
+      mask: '*',
+      validate: answer => !answer.trim() || /^pk_(test|live)_[A-Za-z0-9]+$/.test(answer.trim()) || copy.StripePublishableInvalid,
+    });
+    if (supabaseTargets.includes('cloud')) {
+      console.log(copy.SupabaseSecretInstructions.replace('{url}', supabaseKeysUrl(values.NEXT_PUBLIC_SUPABASE_URL ?? '')));
+      await promptSupabaseSecret(prompts, values, 'SUPABASE_BILLING_SECRET_KEY', 'billing', copy.SupabaseBillingDescription);
+      await promptSupabaseSecret(prompts, values, 'SUPABASE_STRIPE_EVENTS_SECRET_KEY', 'stripe-events', copy.SupabaseEventsDescription);
+      await promptSupabaseSecret(prompts, values, 'SUPABASE_STRIPE_RECONCILIATION_SECRET_KEY', 'stripe-reconciliation', copy.SupabaseReconciliationDescription);
+    } else if (supabaseTargets.includes('local')) {
+      console.log(copy.SupabaseLocalBackendKeys);
+    }
     values.STRIPE_WEBHOOK_SECRET = await prompts.password({
       message: copy.StripeWebhookSecret,
       mask: '*',
@@ -141,12 +189,13 @@ async function promptEnvironmentValues(prompts, imageSecretName = 'SC_IMAGE_UPLO
 }
 
 async function loadPrompts() {
-  const [{ default: confirm }, { default: input }, { default: password }] = await Promise.all([
+  const [{ default: checkbox }, { default: confirm }, { default: input }, { default: password }] = await Promise.all([
+    import('@inquirer/checkbox'),
     import('@inquirer/confirm'),
     import('@inquirer/input'),
     import('@inquirer/password'),
   ]);
-  return { confirm, input, password };
+  return { checkbox, confirm, input, password };
 }
 
 async function configureEnvironment(root, options = {}) {
@@ -181,7 +230,7 @@ async function configureEnvironment(root, options = {}) {
   }
 
   contents = contents.replace(/^(?:SC_)?IMAGE_UPLOAD_SIGNING_SECRET=/m, `${imageSecretName}=`);
-  const values = await promptEnvironmentValues(prompts, imageSecretName);
+  const values = await promptEnvironmentValues(prompts, imageSecretName, options.supabaseTargets);
   for (const [name, value] of Object.entries(values)) {
     if (!value.trim()) continue;
     contents = replaceEnvironmentValue(contents, name, value.trim());
@@ -191,8 +240,60 @@ async function configureEnvironment(root, options = {}) {
   return { created: true, path: destinationPath };
 }
 
+function runCommand(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { ...options, timeout: 10 * 60_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+async function configureLocalSupabase(root, options = {}) {
+  if (!options.supabaseTargets?.includes('local')) return { configured: false };
+  if (options.dependenciesInstalled === false) {
+    console.log(copy.SupabaseLocalDependenciesRequired);
+    return { configured: false };
+  }
+  const run = options.run ?? runCommand;
+  const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  console.log(copy.SupabaseLocalStarting);
+  await run(npx, ['--no-install', 'supabase', 'start'], { cwd: root });
+  await run(npx, ['--no-install', 'supabase', 'db', 'push'], { cwd: root });
+  const status = await run(npx, ['--no-install', 'supabase', 'status', '--output-format', 'json'], { cwd: root });
+  const parsedStatus = JSON.parse(status.stdout);
+  const values = parsedStatus.env ?? parsedStatus;
+  const url = values.API_URL ?? values.api?.url;
+  const publishableKey = values.PUBLISHABLE_KEY ?? values.api?.publishable_key;
+  const secretKey = values.SECRET_KEY ?? values.api?.secret_key;
+  if (!url || !publishableKey || !secretKey) throw new Error(copy.SupabaseLocalStatusMissing);
+  const destinationPath = path.join(root, '.env.development.local');
+  let contents = '';
+  try {
+    contents = await fs.readFile(destinationPath, 'utf8');
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  contents = replaceEnvironmentValue(contents, 'NEXT_PUBLIC_SUPABASE_URL', url);
+  contents = replaceEnvironmentValue(contents, 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY', publishableKey);
+  for (const name of [
+    'SUPABASE_BILLING_SECRET_KEY',
+    'SUPABASE_STRIPE_EVENTS_SECRET_KEY',
+    'SUPABASE_STRIPE_RECONCILIATION_SECRET_KEY',
+    'SUPABASE_SESSION_TRANSFERS_SECRET_KEY',
+  ]) contents = replaceEnvironmentValue(contents, name, secretKey);
+  await fs.writeFile(destinationPath, contents, { encoding: 'utf8', mode: 0o600 });
+  console.log(copy.SupabaseLocalConfigured.replace('{path}', destinationPath));
+  return { configured: true, path: destinationPath };
+}
+
 module.exports = {
   configureEnvironment,
+  configureLocalSupabase,
   setProjectNamespace,
   readProjectNamespace,
   loadPrompts,
@@ -201,4 +302,5 @@ module.exports = {
   namespaceReplacement,
   promptEnvironmentValues,
   replaceEnvironmentValue,
+  selectSupabaseTargets,
 };

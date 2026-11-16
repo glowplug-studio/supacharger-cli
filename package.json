@@ -22,13 +22,13 @@
     "supacharger": "bin/cli.js"
   },
   "scripts": {
-    "check": "node --check bin/cli.js && node --check commands/coredev.js && node --check commands/coreupdate.js && node --check commands/doctor.js && node --check commands/environment.js && node --check commands/initialise.js && node --check commands/setup-preview.js && node --check commands/stripe-agent-tools.js && node --check commands/version.js && node --test",
+    "check": "node --check bin/cli.js && node --check commands/ai-sdk.js && node --check commands/coredev.js && node --check commands/coreupdate.js && node --check commands/doctor.js && node --check commands/environment.js && node --check commands/initialise.js && node --check commands/setup-preview.js && node --check commands/stripe-agent-tools.js && node --check commands/version.js && node --test",
     "test": "node --test"
   },
   "keywords": [
     "cli",
     "git",
-    "submodule",
+    "checkout",
     "updates"
   ],
   "files": [

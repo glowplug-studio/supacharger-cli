@@ -8,7 +8,14 @@ const { extractSourceZip: extractCoreZip } = require('./common/source-archive.cj
 
 const { prepareStarter } = require('./common/test-distribution');
 const { assertSupportedCore } = require('./common/core-compatibility');
-const { configureEnvironment, configureProjectNamespace, setProjectNamespace, loadPrompts } = require('./environment');
+const {
+  configureEnvironment,
+  configureLocalSupabase,
+  configureProjectNamespace,
+  setProjectNamespace,
+  loadPrompts,
+  selectSupabaseTargets,
+} = require('./environment');
 const { selectAvailableExtensions } = require('./extensions');
 const { loadCoreDescriptor, readLocation } = require('./extensions/registry.cjs');
 // TODO: enable only after configuration writes, Supabase provisioning and launch are implemented.
@@ -393,10 +400,19 @@ async function initialise(target = '.', options = {}) {
     transactionRoot = null;
 
     if (process.stdin.isTTY && process.stdout.isTTY) {
-      await configureEnvironment(resolvedTargetDir, { namespace });
-      await require('./project-dependencies.cjs').installProjectDependencies(resolvedTargetDir, await loadPrompts());
+      const prompts = await loadPrompts();
+      const supabaseTargets = await selectSupabaseTargets(prompts);
+      await configureEnvironment(resolvedTargetDir, { namespace, prompts, supabaseTargets });
+      const dependenciesInstalled = await require('./project-dependencies.cjs').installProjectDependencies(resolvedTargetDir, prompts);
+      await configureLocalSupabase(resolvedTargetDir, { dependenciesInstalled, supabaseTargets });
       try {
-        await require('./stripe-agent-tools').configureStripeAgentTools(await loadPrompts());
+        await require('./ai-sdk').configureAiSdk(resolvedTargetDir, prompts);
+      } catch (error) {
+        if (isPromptCancellation(error) || error?.code === 'USER_CANCELLED') throw error;
+        console.warn(require('../messages/en.json').AiSdkCli.OptionalFailed.replace('{reason}', error.message));
+      }
+      try {
+        await require('./stripe-agent-tools').configureStripeAgentTools(prompts);
       } catch (error) {
         if (isPromptCancellation(error) || error?.code === 'USER_CANCELLED') throw error;
         console.warn(require('../messages/en.json').StripeAgentToolsCli.OptionalFailed.replace('{reason}', error.message));

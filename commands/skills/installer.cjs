@@ -18,7 +18,16 @@ const URL = `https://github.com/${REPOSITORY}.git`;
 const namePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const idPattern = /^(general|supacharger|specdrive)\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const repositoryPattern = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i;
-const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+function directoryDigest(files) {
+  const hash = crypto.createHash('sha256');
+  for (const name of Object.keys(files).sort()) {
+    hash.update(name);
+    hash.update('\0');
+    hash.update(files[name].bytes);
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
 const plain = value => typeof value === 'string' && value.trim() && value.length <= 1024 && !/[\x00-\x1f\x7f]/.test(value);
 const skillName = value => process.stdout.isTTY && !process.env.NO_COLOR ? `\x1b[95m${value}\x1b[0m` : value;
 async function git(cwd, args) {
@@ -111,12 +120,11 @@ async function assertDirectories(root, segments) {
   }
 }
 function parseLock(text) {
-  if (!text) return { version: 1, skills: {} };
+  if (!text) return { version: 2, skills: {} };
   const lock = JSON.parse(text);
-  if (lock.version !== 1 || !lock.skills || typeof lock.skills !== 'object' || Array.isArray(lock.skills)) throw new Error(message('InvalidSkillsLock'));
+  if (lock.version !== 2 || !lock.skills || typeof lock.skills !== 'object' || Array.isArray(lock.skills)) throw new Error(message('InvalidSkillsLock'));
   for (const [name, record] of Object.entries(lock.skills)) {
-    if (!namePattern.test(name) || !idPattern.test(record.id) || record.id.split('/')[1] !== name || !repositoryPattern.test(record.repository) || !/^[a-f0-9]{40}$/.test(record.commit) || !record.files || typeof record.files !== 'object' || Array.isArray(record.files) || !record.files['SKILL.md']) throw new Error(message('InvalidSkillsLockEntry'));
-    for (const [file, hash] of Object.entries(record.files)) if (!safeFile(file) || !/^[a-f0-9]{64}$/.test(hash)) throw new Error(message('InvalidSkillsLockFileHash'));
+    if (!namePattern.test(name) || !idPattern.test(record.id) || record.id.split('/')[1] !== name || !repositoryPattern.test(record.repository) || !/^[a-f0-9]{40}$/.test(record.commit) || !/^[a-f0-9]{64}$/.test(record.sha256)) throw new Error(message('InvalidSkillsLockEntry'));
   }
   return lock;
 }
@@ -129,21 +137,21 @@ async function inspectProject(root) {
   if (info && (!info.isFile() || info.isSymbolicLink())) throw new Error(message('RefusingNonFileSkillsLock'));
   return { root, lockPath, lock: parseLock(info ? await fs.readFile(lockPath, 'utf8') : null) };
 }
-async function installedHashes(directory) {
-  const hashes = Object.create(null);
+async function installedDigest(directory) {
+  const files = Object.create(null);
   async function walk(dir, prefix = '') {
-    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const relative = `${prefix}${entry.name}`;
       if (!safeFile(relative) || entry.isSymbolicLink()) throw new Error(message('InstalledSkillContainsAnUnsafePath'));
       if (entry.isDirectory()) await walk(path.join(dir, entry.name), `${relative}/`);
-      else if (entry.isFile()) hashes[relative] = digest(await fs.readFile(path.join(dir, entry.name)));
+      else if (entry.isFile()) files[relative] = { bytes: await fs.readFile(path.join(dir, entry.name)) };
       else throw new Error(message('InstalledSkillContainsASpecialFile'));
     }
   }
   await walk(directory);
-  return hashes;
+  return directoryDigest(files);
 }
-function equalHashes(a, b) { const keys = Object.keys(a); return keys.length === Object.keys(b).length && keys.every(key => a[key] === b[key]); }
 async function installSelection(source, ids, { root = process.cwd(), update = false } = {}) {
   if (!ids.length) return [];
   const selected = [...new Set(ids)].map(id => {
@@ -179,12 +187,12 @@ async function installSelection(source, ids, { root = process.cwd(), update = fa
           previous.repository = source.repository;
           lockChanged = true;
         }
-        if (!equalHashes(await installedHashes(destination), previous.files)) throw new Error(message('LocalChangesInValueInstallationRefused', { value0: skill.name }));
+        if (await installedDigest(destination) !== previous.sha256) throw new Error(message('LocalChangesInValueInstallationRefused', { value0: skill.name }));
         if (!update && previous.commit !== source.commit) throw new Error(message('ValueIsInstalledUseSkillsUpdate', { value0: skill.name, value1: skill.id }));
         if (previous.commit === source.commit) continue;
       } else if (update) throw new Error(message('ValueIsNotInstalledUseSkills', { value0: skill.name, value1: skill.id }));
       const files = await skillFiles(source, skill);
-      plans.push({ skill, destination, files, existed: Boolean(info) });
+      plans.push({ skill, destination, files, sha256: directoryDigest(files), existed: Boolean(info) });
     }
     if (!plans.length && !lockChanged) return [];
     await fs.mkdir(path.join(project.root, '.agents/skills'), { recursive: true });
@@ -192,14 +200,13 @@ async function installSelection(source, ids, { root = process.cwd(), update = fa
     for (const [index, plan] of plans.entries()) {
       plan.staged = path.join(transaction, `${index}-new`);
       plan.backup = path.join(transaction, `${index}-old`);
-      const hashes = Object.create(null);
       for (const [file, { bytes, mode }] of Object.entries(plan.files)) {
         const target = path.join(plan.staged, file);
         await fs.mkdir(path.dirname(target), { recursive: true });
         await fs.writeFile(target, bytes, { mode, flag: 'wx' });
-        hashes[file] = digest(bytes);
       }
-      lock.skills[plan.skill.name] = { id: plan.skill.id, repository: source.repository, commit: source.commit, files: hashes };
+      if (await installedDigest(plan.staged) !== plan.sha256) throw new Error(message('SkillDirectoryVerificationFailed', { value0: plan.skill.name }));
+      lock.skills[plan.skill.name] = { id: plan.skill.id, repository: source.repository, commit: source.commit, sha256: plan.sha256 };
     }
     const stagedLock = path.join(transaction, 'skills-lock.json');
     await fs.writeFile(stagedLock, `${JSON.stringify(lock, null, 2)}\n`);
@@ -207,6 +214,7 @@ async function installSelection(source, ids, { root = process.cwd(), update = fa
       if (plan.existed) await fs.rename(plan.destination, plan.backup);
       applied.push(plan);
       await fs.rename(plan.staged, plan.destination);
+      if (await installedDigest(plan.destination) !== plan.sha256) throw new Error(message('SkillDirectoryVerificationFailed', { value0: plan.skill.name }));
     }
     await fs.rename(stagedLock, lockPath);
     return plans.map(plan => plan.skill.id);

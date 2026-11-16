@@ -5,7 +5,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const test = require('node:test');
 
-const { SUBMODULE_PATH, installCoreDevelopment, updateCoreDevelopment } = require('../commands/coredev');
+const { CHECKOUT_PATH, installCoreDevelopment, updateCoreDevelopment } = require('../commands/coredev');
 
 function git(cwd, ...args) {
   return execFileSync('/usr/bin/git', args, {
@@ -37,31 +37,39 @@ async function fixture(t) {
   return { source, project };
 }
 
-test('Core contributor submodule is installed only by the explicit command and can be updated', async (t) => {
+test('Core contributor checkout is installed locally without changing the parent repository and can be updated', async (t) => {
   const { source, project } = await fixture(t);
-  assert.equal(await fs.stat(path.join(project, SUBMODULE_PATH)).catch(() => null), null);
+  assert.equal(await fs.stat(path.join(project, CHECKOUT_PATH)).catch(() => null), null);
   await installCoreDevelopment({ cwd: project, repository: source, environment: { GIT_ALLOW_PROTOCOL: 'file' } });
-  assert.equal(await fs.readFile(path.join(project, SUBMODULE_PATH, 'AGENTS.md'), 'utf8'), 'first\n');
-  assert.match(await fs.readFile(path.join(project, '.gitmodules'), 'utf8'), /core-development/);
-  git(project, 'add', '.gitmodules', SUBMODULE_PATH);
-  git(project, 'commit', '-m', 'add contributor instructions');
+  assert.equal(await fs.readFile(path.join(project, CHECKOUT_PATH, 'AGENTS.md'), 'utf8'), 'first\n');
+  assert.equal(await fs.stat(path.join(project, '.gitmodules')).catch(() => null), null);
+  assert.equal(git(project, 'status', '--porcelain'), '');
+  assert.match(await fs.readFile(path.join(project, '.git/info/exclude'), 'utf8'), /core-development/);
 
   await fs.writeFile(path.join(source, 'AGENTS.md'), 'second\n');
   git(source, 'add', '.');
   git(source, 'commit', '-m', 'second');
   await updateCoreDevelopment({ cwd: project, repository: source, environment: { GIT_ALLOW_PROTOCOL: 'file' } });
-  assert.equal(await fs.readFile(path.join(project, SUBMODULE_PATH, 'AGENTS.md'), 'utf8'), 'second\n');
+  assert.equal(await fs.readFile(path.join(project, CHECKOUT_PATH, 'AGENTS.md'), 'utf8'), 'second\n');
 });
 
-test('Core contributor installation refuses an unregistered existing destination', async (t) => {
+test('Core contributor installation reuses the expected existing checkout', async (t) => {
   const { source, project } = await fixture(t);
-  await fs.mkdir(path.join(project, SUBMODULE_PATH), { recursive: true });
-  await assert.rejects(installCoreDevelopment({ cwd: project, repository: source, environment: { GIT_ALLOW_PROTOCOL: 'file' } }), /already exists without its expected Git submodule registration/);
+  git(project, 'clone', source, CHECKOUT_PATH);
+  const result = await installCoreDevelopment({ cwd: project, repository: source, environment: { GIT_ALLOW_PROTOCOL: 'file' } });
+  assert.equal(result.action, 'existing');
+  assert.equal(git(project, 'status', '--porcelain'), '');
 });
 
-test('Core contributor update refuses local submodule changes', async (t) => {
+test('Core contributor installation refuses an unrelated existing destination', async (t) => {
+  const { source, project } = await fixture(t);
+  await fs.mkdir(path.join(project, CHECKOUT_PATH), { recursive: true });
+  await assert.rejects(installCoreDevelopment({ cwd: project, repository: source, environment: { GIT_ALLOW_PROTOCOL: 'file' } }), /already exists without being the expected Git checkout/);
+});
+
+test('Core contributor update refuses local checkout changes', async (t) => {
   const { source, project } = await fixture(t);
   await installCoreDevelopment({ cwd: project, repository: source, environment: { GIT_ALLOW_PROTOCOL: 'file' } });
-  await fs.writeFile(path.join(project, SUBMODULE_PATH, 'AGENTS.md'), 'local\n');
+  await fs.writeFile(path.join(project, CHECKOUT_PATH, 'AGENTS.md'), 'local\n');
   await assert.rejects(updateCoreDevelopment({ cwd: project, repository: source, environment: { GIT_ALLOW_PROTOCOL: 'file' } }), /has local changes/);
 });

@@ -22,10 +22,8 @@ const AUTOMATIC_MERGE_PATHS = new Set(
 );
 const DEFAULT_MIGRATION_PATHS = [path.join('supabase', 'migrations')];
 const PROJECT_STYLES_FILE = path.join('src', 'styles', 'project.css');
+const UI_THEME_FILE = path.join('src', 'styles', 'ui-theme.ts');
 const PROJECT_TAILWIND_CONFIG_FILE = 'tailwind.project.config.ts';
-const AUTH_STYLES_FILE = path.join('src', 'styles', 'supacharger-auth.css');
-const ACCOUNT_STYLES_FILE = path.join('src', 'styles', 'supacharger-account.css');
-const ORGANISATION_STYLES_FILE = path.join('src', 'styles', 'supacharger-organisations.css');
 const AUTH_SIDECAR_FILE = path.join('src', 'supacharger.adapters', 'auth', 'auth-sidecar.tsx');
 const ACCOUNT_ADAPTER_FILES = [
   'details-page.tsx',
@@ -50,6 +48,7 @@ const ORGANISATION_ADAPTER_FILES = [
   .map((file) => path.join('src', 'supacharger.adapters', 'organisations', file));
 const IMAGE_LOADER_FILE = path.join('src', 'assets', 'svgr', 'ui', 'image-loader.svg');
 const DEVELOPER_STARTERS = [
+  UI_THEME_FILE,
   'AGENTS.md',
   '.agents/project/AGENTS.md',
   'CHANGELOG.project.md',
@@ -57,25 +56,10 @@ const DEVELOPER_STARTERS = [
   path.join('src', 'supacharger.adapters', 'media', 'image-targets.ts'),
   PROJECT_TAILWIND_CONFIG_FILE,
   path.join('src', 'supacharger.adapters', 'request-guard.ts'),
-  AUTH_STYLES_FILE,
-  ACCOUNT_STYLES_FILE,
-  ORGANISATION_STYLES_FILE,
   AUTH_SIDECAR_FILE,
   ...ACCOUNT_ADAPTER_FILES,
   ...BILLING_ADAPTER_FILES,
   ...ORGANISATION_ADAPTER_FILES,
-];
-const LEGACY_AUTH_ROUTE_FILES = [
-  path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'layout.tsx'),
-  path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'login', 'page.tsx'),
-  path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'create', 'page.tsx'),
-  path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'login-magic', 'page.tsx'),
-  path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'reset-password', 'page.tsx'),
-  path.join('src', 'app', '(project)', '(unauthenticated)', 'account', 'reset-password', 'new', 'page.tsx'),
-];
-const LEGACY_PROJECT_STYLE_FILES = [
-  path.join('src', 'styles', 'globals.css'),
-  path.join('src', 'styles', 'globals.scss'),
 ];
 const LEGACY_POSTCSS_CONFIG = `module.exports = {
   plugins: {
@@ -83,6 +67,7 @@ const LEGACY_POSTCSS_CONFIG = `module.exports = {
   },
 };`;
 const DEVELOPER_OWNED_FILES = [
+  UI_THEME_FILE,
   IMAGE_LOADER_FILE,
   PROJECT_TAILWIND_CONFIG_FILE,
   'src/supacharger.config.ts',
@@ -91,9 +76,6 @@ const DEVELOPER_OWNED_FILES = [
   path.join('src', 'i18n', 'request.ts'),
   path.join('src', 'assets', 'svgr', 'ui', 'inline-loader-dark.svg'),
   path.join('src', 'assets', 'svgr', 'ui', 'inline-loader.svg'),
-  AUTH_STYLES_FILE,
-  ACCOUNT_STYLES_FILE,
-  ORGANISATION_STYLES_FILE,
   AUTH_SIDECAR_FILE,
   PROJECT_STYLES_FILE,
   CORE_LOCK_FILE,
@@ -475,6 +457,32 @@ function migrateTotpConfigSource(source, keys = ['enroll_enabled', 'verify_enabl
     else migratedSection = `${migratedSection.replace(/\s*$/, '')}\n${key} = true\n`;
   }
   return `${source.slice(0, bounds.start)}${migratedSection}${source.slice(bounds.end)}`;
+}
+
+function migrateLocalSmtpConfigSource(source) {
+  if (tomlSectionBounds(source, 'local_smtp')) return source;
+  return source.replace(/^\[inbucket\]\s*$/m, '[local_smtp]');
+}
+
+async function migrateLocalSmtpConfig(rootDir, options = {}) {
+  const configPath = path.join(rootDir, 'supabase', 'config.toml');
+  let source;
+  try {
+    source = await fs.readFile(configPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  if (!tomlSectionBounds(source, 'inbucket')) return [];
+  if (tomlSectionBounds(source, 'local_smtp')) {
+    throw new Error('supabase/config.toml contains both [inbucket] and [local_smtp]; merge the email-testing settings manually.');
+  }
+  const changes = ['inbucket -> local_smtp'];
+  if (options.plan === true) return changes;
+  if (options.backup !== false) await backupConflicts(rootDir, rootDir, ['supabase/config.toml']);
+  await fs.writeFile(configPath, migrateLocalSmtpConfigSource(source), 'utf8');
+  if (!options.quiet) console.log('\x1b[34mRenamed local Supabase [inbucket] configuration to [local_smtp] for CLI v3.\x1b[0m');
+  return changes;
 }
 
 async function migrateLocalTotpConfig(rootDir, options = {}) {
@@ -941,42 +949,6 @@ async function readProjectName(rootDir) {
   return 'Add your project name';
 }
 
-async function migrateLegacyProjectStyles(rootDir) {
-  const projectStylesPath = path.join(rootDir, PROJECT_STYLES_FILE);
-  try {
-    await fs.access(projectStylesPath);
-    return;
-  } catch {
-    // Migrate a legacy developer stylesheet only when project.css does not exist.
-  }
-
-  for (const relativeLegacyPath of LEGACY_PROJECT_STYLE_FILES) {
-    const legacyPath = path.join(rootDir, relativeLegacyPath);
-    let content;
-    try {
-      content = await fs.readFile(legacyPath, 'utf8');
-    } catch {
-      continue;
-    }
-
-    if (relativeLegacyPath.endsWith('.scss')) {
-      if (/(^|\n)\s*\$[\w-]+\s*:|@(?:mixin|include|extend)\b/.test(content)) {
-        throw new Error(
-          `${relativeLegacyPath} uses Sass-only syntax. Migrate it to ${PROJECT_STYLES_FILE} before updating the core.`
-        );
-      }
-      content = content.replace(/^(\s*)\/\/\s?(.*)$/gm, '$1/* $2 */');
-    }
-
-    const projectName = await readProjectName(rootDir);
-    const projectHeader = `/**\n * Project: ${projectName}\n *\n * Developer-owned. The Supacharger CLI preserves this file.\n */\n\n`;
-    await fs.mkdir(path.dirname(projectStylesPath), { recursive: true });
-    await fs.writeFile(projectStylesPath, `${projectHeader}${content}`, 'utf8');
-    console.log(`\x1b[34mMoved application styles to ${PROJECT_STYLES_FILE}.\x1b[0m`);
-    return;
-  }
-}
-
 async function migrateLegacyPostcssConfig(rootDir, options = {}) {
   const legacyPath = path.join(rootDir, 'postcss.config.js');
   let content;
@@ -1094,6 +1066,7 @@ function dependencyContract(packageJson) {
     devDependencies: packageJson.devDependencies ?? {},
     optionalDependencies: packageJson.optionalDependencies ?? {},
     overrides: packageJson.overrides ?? {},
+    allowScripts: packageJson.allowScripts ?? {},
   });
 }
 
@@ -1114,11 +1087,40 @@ function dependencyContractChanged(currentPackage, incomingPackage) {
     return true;
   }
 
+  if (
+    incomingPackage.allowScripts &&
+    !isDeepStrictEqual(
+      currentPackage.allowScripts ?? {},
+      mergeInstallScriptPolicy(currentPackage.allowScripts ?? {}, incomingPackage.allowScripts)
+    )
+  ) {
+    return true;
+  }
+
   return DEPENDENCY_OBJECT_KEYS.some((key) =>
     Object.entries(incomingPackage[key] ?? {}).some(
       ([name, version]) => !isDeepStrictEqual(currentPackage[key]?.[name], version)
     )
   );
+}
+
+function installScriptPackageName(approvalKey) {
+  const versionSeparator = approvalKey.lastIndexOf('@');
+  if (versionSeparator <= 0) return approvalKey;
+  if (approvalKey.startsWith('@') && versionSeparator < approvalKey.indexOf('/')) return approvalKey;
+  return approvalKey.slice(0, versionSeparator);
+}
+
+function mergeInstallScriptPolicy(currentPolicy, incomingPolicy) {
+  const mergedPolicy = { ...currentPolicy };
+  for (const [approvalKey, approved] of Object.entries(incomingPolicy)) {
+    const packageName = installScriptPackageName(approvalKey);
+    for (const currentKey of Object.keys(mergedPolicy)) {
+      if (installScriptPackageName(currentKey) === packageName) delete mergedPolicy[currentKey];
+    }
+    mergedPolicy[approvalKey] = approved;
+  }
+  return mergedPolicy;
 }
 
 function mergeContractValue(currentValue, incomingValue) {
@@ -1150,6 +1152,12 @@ async function mergeDependencyContract(rootDir, incomingPackage) {
     if (incomingPackage[key]) {
       mergedPackage[key] = mergeContractValue(currentPackage[key] ?? {}, incomingPackage[key]);
     }
+  }
+  if (incomingPackage.allowScripts) {
+    mergedPackage.allowScripts = mergeInstallScriptPolicy(
+      currentPackage.allowScripts ?? {},
+      incomingPackage.allowScripts
+    );
   }
 
   if (JSON.stringify(currentPackage) !== JSON.stringify(mergedPackage)) {
@@ -1291,6 +1299,7 @@ const APPLICATION_PACKAGE_KEYS = new Set([
 const AUTOMATIC_PACKAGE_KEYS = new Set([
   'packageManager',
   'engines',
+  'allowScripts',
   ...DEPENDENCY_OBJECT_KEYS,
 ]);
 
@@ -1309,12 +1318,13 @@ async function matchesSupportedSupabaseConfigChange(baselineContent, latestConte
   if (baselineContent === null || latestContent === null) return false;
 
   const baselineSource = baselineContent.toString('utf8');
-  const variants = [
+  const totpVariants = [
     baselineSource,
     migrateTotpConfigSource(baselineSource, ['enroll_enabled']),
     migrateTotpConfigSource(baselineSource, ['verify_enabled']),
     migrateTotpConfigSource(baselineSource),
   ];
+  const variants = [...new Set(totpVariants.flatMap((source) => [source, migrateLocalSmtpConfigSource(source)]))];
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'supacharger-config-merge-'));
   try {
     for (const source of variants) {
@@ -1730,37 +1740,6 @@ async function installMissingDeveloperStarters(updateDir, rootDir, relativePaths
   return installed;
 }
 
-async function migrateLegacyAuthRoutes(rootDir, baselineDir) {
-  const removable = [];
-  for (const relPath of LEGACY_AUTH_ROUTE_FILES) {
-    const localPath = path.join(rootDir, relPath);
-    const baselinePath = path.join(baselineDir, relPath);
-    try {
-      await fs.access(localPath);
-    } catch (error) {
-      if (error?.code === 'ENOENT') continue;
-      throw error;
-    }
-    try {
-      if (!await filesEqual(localPath, baselinePath)) {
-        throw new Error(
-          `${relPath} contains application changes. Move them into the auth sidecar adapter before updating the core.`,
-        );
-      }
-    } catch (error) {
-      if (error?.code === 'ENOENT') {
-        throw new Error(`${relPath} cannot be migrated because it is missing from the installed Core baseline.`);
-      }
-      throw error;
-    }
-    removable.push(relPath);
-  }
-  if (removable.length === 0) return [];
-  await backupConflicts(rootDir, rootDir, removable);
-  for (const relPath of removable) await fs.rm(path.join(rootDir, relPath));
-  return removable;
-}
-
 async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
   const [baselineManifest, latestManifest] = await Promise.all([
     readManagedManifest(baselineDir),
@@ -1781,6 +1760,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     englishCatalogueAdditions,
     legacyAuthSessionConfigMigration,
     legacyMfaConfigMigration,
+    localSmtpConfigMigration,
     localTotpConfigMigration,
     imageFunctionConfigMigration,
     profileMediaFunctionConfigMigration,
@@ -1802,6 +1782,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     mergeEnglishCatalogue(rootDir, latestDir, { plan: true }),
     migrateLegacyAuthSessionConfig(rootDir, { plan: true }),
     migrateLegacyMfaConfig(rootDir, { plan: true }),
+    migrateLocalSmtpConfig(rootDir, { plan: true }),
     migrateLocalTotpConfig(rootDir, { plan: true }),
     migrateImageFunctionConfig(rootDir, { plan: true, sourceRoot: latestDir }),
     migrateProfileMediaFunctionConfig(rootDir, { plan: true }),
@@ -1839,6 +1820,7 @@ async function buildUpdatePlan(rootDir, baselineDir, latestDir) {
     latestManifest,
     legacyAuthSessionConfigMigration,
     legacyMfaConfigMigration,
+    localSmtpConfigMigration,
     localTotpConfigMigration,
     imageFunctionConfigMigration,
     profileMediaFunctionConfigMigration,
@@ -1905,6 +1887,8 @@ async function printPlan(rootDir, installState, options = {}) {
     plan.signOutPolicyConfigMigration.forEach((key) => console.log(`  CONFIG ${key}=true`));
     console.log(`Local Supabase TOTP changes: ${plan.localTotpConfigMigration.length}`);
     plan.localTotpConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}=true`));
+    console.log(`Local Supabase mail changes: ${plan.localSmtpConfigMigration.length}`);
+    plan.localSmtpConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}`));
     console.log(`Image function bundle changes: ${plan.imageFunctionConfigMigration.length}`);
     plan.imageFunctionConfigMigration.forEach((key) => console.log(`  SUPABASE ${key}`));
     console.log(`Profile media function changes: ${plan.profileMediaFunctionConfigMigration.length}`);
@@ -1919,7 +1903,6 @@ async function printPlan(rootDir, installState, options = {}) {
 async function coreupdate(options = {}) {
   const integrityIgnoredFiles = [
     ...DEVELOPER_OWNED_PATHS,
-    ...LEGACY_PROJECT_STYLE_FILES,
     'src/supacharger/supacharger-config.ts',
   ];
 
@@ -1957,7 +1940,6 @@ Enter Y to continue: \u001b[0m`;
     const updateDir = path.resolve(cwd, '.sc-core-update');
 
     await migrateLegacyConfig(cwd);
-    await migrateLegacyProjectStyles(cwd);
 
     const installedCommit = installState.commit;
     console.log(`\x1b[34mCurrent core commit:\x1b[0m \x1b[32m${installedCommit}\x1b[0m`);
@@ -2010,7 +1992,6 @@ Enter Y to continue: \u001b[0m`;
 
     if (missingFiles.length === 0 && differentFiles.length === 0) {
       console.log('\x1b[32m✓ Local files match the installed core baseline.\x1b[0m');
-      await migrateLegacyAuthRoutes(cwd, updateDir);
       await removeDirContents(updateDir);
       targetCommit = await cloneLatestSource(updateDir, { ref: options.source ? options.ref : targetCommit, repository: installState.repository, source: options.source });
       const latestManifest = await readManagedManifest(updateDir);
@@ -2063,6 +2044,7 @@ Enter Y to continue: \u001b[0m`;
       await removeObsoleteManagedFiles(cwd, baselineManagedFiles, latestManagedFiles, preservedPaths);
       await migrateLegacyAuthSessionConfig(cwd);
       await migrateLegacyMfaConfig(cwd);
+      await migrateLocalSmtpConfig(cwd);
       await migrateLocalTotpConfig(cwd);
       await migrateImageFunctionConfig(cwd, { sourceRoot: updateDir });
       await migrateProfileMediaFunctionConfig(cwd);
@@ -2113,7 +2095,6 @@ Enter Y to continue: \u001b[0m`;
       process.exit(1);
     }
 
-    await migrateLegacyAuthRoutes(cwd, updateDir);
     await fs.rm(updateDir, { recursive: true, force: true });
     await fs.mkdir(updateDir, { recursive: true });
     targetCommit = await cloneLatestSource(updateDir, {
@@ -2181,6 +2162,7 @@ Enter Y to continue: \u001b[0m`;
 
     await migrateLegacyAuthSessionConfig(cwd);
     await migrateLegacyMfaConfig(cwd);
+    await migrateLocalSmtpConfig(cwd);
     await migrateLocalTotpConfig(cwd);
     await migrateImageFunctionConfig(cwd, { sourceRoot: updateDir });
     await migrateProfileMediaFunctionConfig(cwd);
@@ -2231,13 +2213,13 @@ coreupdate.testHelpers = {
   migrateSignUpTermsConfig,
   migrateLegacyAuthSessionConfig,
   migrateLegacyMfaConfig,
+  migrateLocalSmtpConfig,
+  migrateLocalSmtpConfigSource,
   migrateLocalTotpConfig,
   migrateImageFunctionConfig,
   migrateProfileMediaFunctionConfig,
   migrateLegacyConfig,
   migrateLegacyPostcssConfig,
-  migrateLegacyProjectStyles,
-  migrateLegacyAuthRoutes,
   migrateRootDocumentConfig,
   mergeEnglishCatalogue,
   installMissingDeveloperStarters,

@@ -23,8 +23,6 @@ const {
   migrateImageFunctionConfig,
   migrateLegacyConfig,
   migrateLegacyPostcssConfig,
-  migrateLegacyProjectStyles,
-  migrateLegacyAuthRoutes,
   migrateRootDocumentConfig,
   migrateSessionTransferConfig,
   moveFiles,
@@ -175,20 +173,6 @@ test('merges the ImageMagick static asset into the image function config', async
   assert.deepEqual(await migrateImageFunctionConfig(root, { plan: true }), []);
 });
 
-test('migrates a legacy developer stylesheet to the project style seam', async (t) => {
-  const root = await temporaryDirectory(t);
-  const legacyPath = path.join(root, 'src', 'styles', 'globals.css');
-  await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-  await fs.writeFile(path.join(root, 'package.json'), '{"name":"example-application"}\n', 'utf8');
-  await fs.writeFile(legacyPath, '.product-banner { color: rebeccapurple; }\n', 'utf8');
-
-  await migrateLegacyProjectStyles(root);
-
-  const migrated = await fs.readFile(path.join(root, 'src', 'styles', 'project.css'), 'utf8');
-  assert.match(migrated, /Project: example-application/);
-  assert.match(migrated, /product-banner/);
-});
-
 test('backs up and removes only the known legacy PostCSS configuration', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.writeFile(
@@ -228,9 +212,6 @@ test('preserves existing developer-owned files while moving an update', async (t
     path.join('src', 'assets', 'svgr', 'ui', 'inline-loader-dark.svg'),
     path.join('src', 'assets', 'svgr', 'ui', 'inline-loader.svg'),
     'src/styles/project.css',
-    'src/styles/supacharger-account.css',
-    'src/styles/supacharger-auth.css',
-    'src/styles/supacharger-organisations.css',
   ];
 
   for (const relativePath of developerFiles) {
@@ -531,20 +512,14 @@ test('installs a missing developer-owned starter file', async (t) => {
   assert.equal(await fs.readFile(path.join(root, relativePath), 'utf8'), 'starter styles\n');
 });
 
-test('installs missing auth presentation starters without overwriting developer customisations', async (t) => {
+test('installs the missing auth sidecar starter', async (t) => {
   const root = await temporaryDirectory(t);
   const update = await temporaryDirectory(t);
-  const authStyles = path.join('src', 'styles', 'supacharger-auth.css');
   const authSidecar = path.join('src', 'supacharger.adapters', 'auth', 'auth-sidecar.tsx');
-  for (const relativePath of [authStyles, authSidecar]) {
-    await fs.mkdir(path.dirname(path.join(update, relativePath)), { recursive: true });
-    await fs.writeFile(path.join(update, relativePath), `starter ${relativePath}\n`);
-  }
-  await fs.mkdir(path.dirname(path.join(root, authStyles)), { recursive: true });
-  await fs.writeFile(path.join(root, authStyles), 'developer auth styles\n');
+  await fs.mkdir(path.dirname(path.join(update, authSidecar)), { recursive: true });
+  await fs.writeFile(path.join(update, authSidecar), `starter ${authSidecar}\n`);
 
   assert.deepEqual(await installMissingDeveloperStarters(update, root), [authSidecar]);
-  assert.equal(await fs.readFile(path.join(root, authStyles), 'utf8'), 'developer auth styles\n');
   assert.equal(await fs.readFile(path.join(root, authSidecar), 'utf8'), `starter ${authSidecar}\n`);
 });
 
@@ -609,30 +584,6 @@ test('installs missing organisation adapter starters without overwriting develop
   assert.equal(await fs.readFile(path.join(root, adapters[0]), 'utf8'), 'developer chrome\n');
 });
 
-test('moves unchanged legacy auth routes out of the developer route group and rejects modified routes', async (t) => {
-  const root = await temporaryDirectory(t);
-  const baseline = await temporaryDirectory(t);
-  const route = path.join(
-    'src',
-    'app',
-    '(project)',
-    '(unauthenticated)',
-    'account',
-    'login',
-    'page.tsx',
-  );
-  for (const directory of [root, baseline]) {
-    await fs.mkdir(path.dirname(path.join(directory, route)), { recursive: true });
-    await fs.writeFile(path.join(directory, route), 'canonical legacy route\n');
-  }
-
-  assert.deepEqual(await migrateLegacyAuthRoutes(root, baseline), [route]);
-  await assert.rejects(fs.access(path.join(root, route)));
-
-  await fs.writeFile(path.join(root, route), 'developer route changes\n');
-  await assert.rejects(migrateLegacyAuthRoutes(root, baseline), /contains application changes/);
-});
-
 test('personalises the core project stylesheet starter without changing established names', async (t) => {
   const root = await temporaryDirectory(t);
   const projectStyles = path.join(root, 'src', 'styles', 'project.css');
@@ -658,8 +609,24 @@ test('installs changed dependencies and verifies changed migrations before compl
   const root = await temporaryDirectory(t);
   const update = await temporaryDirectory(t);
   const migration = path.join('supabase', 'migrations', '20260812000000_billing.sql');
-  const currentPackage = { name: 'consumer', packageManager: 'npm@11.0.0', dependencies: { stripe: '18.5.0' } };
-  const incomingPackage = { name: 'consumer', packageManager: 'npm@11.0.0', dependencies: { stripe: '22.5.0' } };
+  const currentPackage = {
+    name: 'consumer',
+    packageManager: 'npm@11.0.0',
+    dependencies: { stripe: '18.5.0' },
+    allowScripts: {
+      '@swc/core@1.15.0': true,
+      'consumer-native-module@1.0.0': true,
+    },
+  };
+  const incomingPackage = {
+    name: 'consumer',
+    packageManager: 'npm@11.0.0',
+    dependencies: { stripe: '22.5.0' },
+    allowScripts: {
+      '@swc/core@1.16.22': true,
+      '@parcel/watcher': false,
+    },
+  };
 
   await fs.mkdir(path.join(update, 'supabase', 'migrations'), { recursive: true });
   await fs.writeFile(path.join(root, 'package.json'), `${JSON.stringify(currentPackage)}\n`);
@@ -685,6 +652,11 @@ test('installs changed dependencies and verifies changed migrations before compl
   const mergedPackage = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
   assert.equal(mergedPackage.name, 'consumer');
   assert.equal(mergedPackage.dependencies.stripe, '22.5.0');
+  assert.deepEqual(mergedPackage.allowScripts, {
+    'consumer-native-module@1.0.0': true,
+    '@swc/core@1.16.22': true,
+    '@parcel/watcher': false,
+  });
   assert.equal(await fs.readFile(path.join(root, migration), 'utf8'), 'select 1;\n');
   assert.deepEqual(commands.map(({ command }) => command), [
     'npm install',
@@ -980,6 +952,35 @@ test('treats local Supabase config as automatically merge-managed', async (t) =>
   }
 
   assert.deepEqual(await changedManualMergePaths(baseline, latest, manifest), []);
+});
+
+test('migrates the Supabase CLI v3 local mail section without changing its settings', async (t) => {
+  const root = await temporaryDirectory(t);
+  const configPath = path.join(root, 'supabase', 'config.toml');
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, '[inbucket]\nenabled = true\nport = 54324\n');
+  const migrate = coreupdate.testHelpers.migrateLocalSmtpConfig;
+  assert.deepEqual(await migrate(root, { plan: true }), ['inbucket -> local_smtp']);
+  assert.match(await fs.readFile(configPath, 'utf8'), /^\[inbucket\]/m);
+  await migrate(root, { backup: false, quiet: true });
+  const migrated = await fs.readFile(configPath, 'utf8');
+  assert.match(migrated, /^\[local_smtp\]/m);
+  assert.match(migrated, /^port = 54324$/m);
+  assert.doesNotMatch(migrated, /^\[inbucket\]/m);
+  assert.deepEqual(await migrate(root, { backup: false, quiet: true }), []);
+});
+
+test('treats the Supabase CLI v3 local mail rename as an automatic merge', async (t) => {
+  const baseline = await temporaryDirectory(t);
+  const latest = await temporaryDirectory(t);
+  for (const [directory, section] of [[baseline, 'inbucket'], [latest, 'local_smtp']]) {
+    const configPath = path.join(directory, 'supabase', 'config.toml');
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, `[${section}]\nenabled = true\nport = 54324\n`);
+  }
+  assert.deepEqual(await changedManualMergePaths(baseline, latest, {
+    mergeManagedPaths: ['supabase/config.toml'],
+  }), []);
 });
 
 
