@@ -4,6 +4,8 @@
 
 ### Added
 
+- `supacharger nuke -u <UUID>` previews and queues an application's account-deletion policy through a separate administrator credential, explicit application origin and UUID confirmation. It reports the job reference without claiming cleanup has completed, and refuses redirects or non-loopback HTTP targets.
+
 - Explicit `init --namespace` selection and default `sc_` preparation now run before environment prompts, including non-interactive installation. Fresh starters receive a verified namespaced initial migration.
 - Declarative Core updates merge upstream and application definitions and generate a project-specific migration, preserving installed history and retaining unfinished update checksums until deployment is verified. Conflicts and unclassified data upgrades stop for review.
 

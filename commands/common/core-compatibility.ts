@@ -53,7 +53,7 @@ async function prepareCoreTarget<T extends CoreTargetOptions>(options: T = {} as
 }
 
 async function checkCommandCompatibility(command: Command) {
-  if (command.name() === 'init' || command.name() === 'which') return; // These commands inspect or establish version state themselves.
+  if (command.name() === 'init' || command.name() === 'which' || command.name() === 'nuke') return; // These commands inspect/establish version state or authenticate to an explicit application endpoint.
   const options = command.opts<CoreTargetOptions & { root?: string }>();
   const installation = await checkLocalCore(options.root || process.cwd());
   // Resolve user paths before normalising the working directory.

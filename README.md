@@ -36,3 +36,15 @@ The `-g` option makes the command available across your projects. The same insta
 | Work on the CLI or Core itself | [Contributor guide](https://github.com/glowplug-studio/supacharger-cli/blob/main/docs/contributing.md) |
 
 The guides follow this repository's source. Some features may be ahead of the published npm package; see the [changelog](https://github.com/glowplug-studio/supacharger-cli/blob/main/CHANGELOG.md).
+
+## Delete a user through the application policy
+
+```bash
+supacharger nuke -u <user-uuid> --url https://your-application.example
+```
+
+Set the matching server-only `ACCOUNT_DELETION_ADMIN_SECRET` in the environment or the local `.env.local` file. The command never accepts the secret as an argument. Set `SUPACHARGER_APP_URL` there to omit `--url`. The application must provide the administrator deletion endpoint, an approved enabled deletion policy and a ready worker. HTTPS is required except for local loopback development; redirects are refused.
+
+The command displays the application, Supabase project, target UUID, deletion scope and retention rules. It requires the UUID to be typed again before submission. For deliberate non-interactive use, add `--confirm <same-user-uuid>`. Policy blockers stop submission. An accepted job runs asynchronously through the same cleanup handlers as account deletion; queue acceptance does not mean cleanup has completed. Keep the printed job reference, especially if the response is lost, and inspect that job before retrying.
+
+Supacharger supplies no administrator panel. This command is a privileged alternative; it does not bypass the policy or delete the Auth user directly.

@@ -345,5 +345,30 @@
     "PendingMismatch": "An unfinished database update differs from this target or its saved migration. Finish and verify that update before proceeding.",
     "Plan": "Database definitions to merge: {count}. Existing migration history is preserved; native sync generates a project-specific forward migration.",
     "Review": "Review the generated SQL before continuing. It can include pending project changes as well as Core changes. The incoming Core migration chain has not been copied."
+  },
+  "NukeCli": {
+    "Description": "Queue deletion of a user through the application deletion policy",
+    "UserOption": "UUID of the user to delete",
+    "UrlOption": "Application origin (defaults to SUPACHARGER_APP_URL)",
+    "ConfirmOption": "Explicit target UUID confirmation for non-interactive use",
+    "InvalidUser": "Provide a valid user UUID with -u or --user.",
+    "InvalidUrl": "Use an HTTPS application origin, or HTTP localhost/127.0.0.1/::1, without credentials, a path, query or fragment.",
+    "UrlRequired": "Provide --url or set SUPACHARGER_APP_URL in the environment or local .env.local file.",
+    "SecretRequired": "Set ACCOUNT_DELETION_ADMIN_SECRET to the matching server-only administrator secret (at least 32 characters).",
+    "EnvironmentUnreadable": "The local .env.local file could not be read. Check access and syntax; do not paste credentials into chat.",
+    "ConfirmationMismatch": "The confirmation must match the target user UUID. No deletion request was submitted.",
+    "NonInteractive": "Non-interactive deletion requires --confirm followed by the exact target user UUID.",
+    "ConnectionFailed": "The application could not be reached securely. Redirects are not followed.",
+    "RequestRejected": "The application rejected the request (HTTP {status}). Check administrator access, policy readiness and the application version.",
+    "InvalidResponse": "The application returned an invalid deletion response. Check that it supports this CLI command.",
+    "Target": "Application: {origin}\nSupabase project: {project}\nNamespace: {namespace}\nUser: {user}",
+    "Policy": "Deletion policy: {summary}",
+    "Retention": "Retention: {retention}",
+    "Blockers": "Deletion is blocked:",
+    "Blocked": "Resolve the reported policy blockers before requesting deletion.",
+    "Confirmation": "This permanently deletes the user under the displayed policy. Type {user} to confirm:",
+    "JobReference": "Deletion job reference: {job}",
+    "Accepted": "Deletion accepted and queued. Job: {job}. The worker completes cleanup asynchronously; this is not confirmation that deletion has finished.",
+    "OutcomeUnknown": "The deletion result could not be confirmed. Check job {job} with an authorised operator before retrying; the request may already have been accepted."
   }
 }

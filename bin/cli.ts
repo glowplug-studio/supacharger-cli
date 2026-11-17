@@ -11,6 +11,7 @@ import coreupdateCommand = require('../commands/coreupdate');
 import doctorCommand = require('../commands/doctor');
 import { printSelectedVersion } from '../commands/version';
 import { version } from '../package.json';
+import { runNuke } from '../commands/nuke';
 
 import { checkCommandCompatibility } from '../commands/common/core-compatibility';
 const program = new Command();
@@ -24,6 +25,14 @@ program
 
 registerSkills(program);
 registerExtensions(program);
+
+program
+  .command('nuke')
+  .description(english.NukeCli.Description)
+  .requiredOption('-u, --user <uuid>', english.NukeCli.UserOption)
+  .option('--url <origin>', english.NukeCli.UrlOption)
+  .option('--confirm <uuid>', english.NukeCli.ConfirmOption)
+  .action(async (options: Parameters<typeof runNuke>[0]) => { await runNuke(options); });
 
 program
   .command('which')
